@@ -26,14 +26,15 @@ export function useActions() {
   // ── Auth ─────────────────────────────────────────────────────────────────
 
   const login = useCallback(async (email, password) => {
-    const { error } = await authApi.signIn(email, password)
+    const { data, error } = await authApi.signIn(email, password)
     if (error) {
       const msg = error.message.includes('Invalid') ? 'Email o contraseña incorrectos' : error.message
       toast(msg, true)
       return { error: msg }
     }
-    // onAuthStateChange in StoreProvider loads the profile + private data
-    return {}
+    // Fetch profile so the component can navigate based on role
+    const { data: profile } = await profilesApi.get(data.user.id)
+    return { user: profile || { id: data.user.id, role: data.user.user_metadata?.role || 'buyer' } }
   }, [toast])
 
   const register = useCallback(async ({ email, password, role, name, location, storeName, storeDesc, storeLogo }) => {
@@ -44,11 +45,11 @@ export function useActions() {
       toast(msg, true)
       return { error: msg }
     }
-    // Upsert profile with all fields (trigger may miss some)
-    if (data?.user) {
+    // Only upsert if there is an active session (email confirmation not required)
+    if (data?.session) {
       await profilesApi.upsertOwn({ ...meta, email, role, emailVerified: false, walletBalance: 0 })
     }
-    return { data }
+    return { user: data.user }
   }, [toast])
 
   const logout = useCallback(async () => {
