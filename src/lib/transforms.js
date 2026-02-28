@@ -61,15 +61,16 @@ export const toOrder = (r) => {
   if (!r) return null
   const d = r.data || {}
   const vendors = Array.isArray(d.vendors) ? d.vendors : []
+  const v0 = vendors[0] || {}
   return {
     id:              r.id,
     buyerId:         r.buyer_id                         || null,
-    merchantId:      r.merchant_id || vendors[0]?.merchantId || null,
+    merchantId:      r.merchant_id || v0.merchantId     || null,
     status:          r.status                           || 'pending',
     createdAt:       r.created_at                       || null,
     updatedAt:       r.updated_at                       || null,
     buyerName:       d.buyerName                        || '',
-    merchantName:    vendors[0]?.merchantName           || '',
+    merchantName:    v0.merchantName                    || '',
     grandTotal:      Number(d.grandTotal)               || 0,
     shippingTotal:   Number(d.shippingTotal)            || 0,
     paymentMethod:   d.paymentMethod                    || '',
@@ -79,6 +80,13 @@ export const toOrder = (r) => {
     deliveryType:    d.deliveryType                     || 'delivery',
     deadline:        d.deadline                         || null,
     vendors,
+    // Flattened from first vendor so merchant-side code can access directly
+    items:           Array.isArray(v0.items) ? v0.items : [],
+    subtotal:        Number(v0.subtotal)                || 0,
+    merchantAmount:  Number(v0.merchantAmount)          || 0,
+    review:          v0.review                          || null,
+    vendorStatus:    v0.status                          || null,
+    shippingGuide:   v0.shippingGuide                   || null,
   }
 }
 

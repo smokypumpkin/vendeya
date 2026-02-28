@@ -899,7 +899,7 @@ function useSchema(schemas) {
     const id = "vy-jsonld";
     let el = document.getElementById(id);
     if(!el) { el = document.createElement("script"); el.id = id; el.type = "application/ld+json"; document.head.appendChild(el); }
-    el.textContent = JSON.stringify(schemas.length === 1 ? schemas[0] : { "@context":"https://schema.org", "@graph": schemas });
+    el.textContent = JSON.stringify((schemas?.length === 1) ? schemas[0] : { "@context":"https://schema.org", "@graph": schemas || [] });
     return () => { /* keep on unmount — updated on next page */ };
   }, [JSON.stringify(schemas)]);
 }
@@ -1430,7 +1430,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
   ].filter(s=>s));
 
   /* Product reviews: reviews for this specific product */
-  const productReviews = orders.filter(o => o.review && o.items.some(i => i.productId===product.id)).map(o => ({...o.review, buyerName:o.buyerName}));
+  const productReviews = orders.filter(o => o.review && (o.items||[]).some(i => i.productId===product.id)).map(o => ({...o.review, buyerName:o.buyerName}));
   const storeReviews   = orders.filter(o => o.merchantId===product.merchantId && o.review).map(o => ({...o.review, buyerName:o.buyerName}));
   const avgR = productReviews.length ? productReviews.reduce((s,r)=>s+r.rating,0)/productReviews.length : 0;
 
@@ -3144,8 +3144,8 @@ function MerchantDash({ user,users,products,orders,nav,upU,showT,setUser,reviews
   const mp    = products.filter(p => p.merchantId===user?.id);
   const mo    = orders.filter(o => o.merchantId===user?.id);
   const pending = mo.filter(o => ["submitted","verified"].includes(o.status));
-  const escrow  = mo.filter(o => ["submitted","verified","processing","shipped"].includes(o.status)).reduce((s,o)=>s+o.merchantAmount,0);
-  const earned  = mo.filter(o => o.status==="released").reduce((s,o)=>s+o.merchantAmount,0);
+  const escrow  = mo.filter(o => ["submitted","verified","processing","shipped"].includes(o.status)).reduce((s,o)=>s+(o.merchantAmount||0),0);
+  const earned  = mo.filter(o => o.status==="released").reduce((s,o)=>s+(o.merchantAmount||0),0);
   const mu = users?.find(u=>u.id===user?.id)||user;
   const walletBal = mu?.walletBalance||0;
   // sync pickup state from user data
@@ -3666,10 +3666,10 @@ function MerchantAnalytics({ user, products, orders, nav, reviews=[] }) {
   const mp = products.filter(p => p.merchantId===user?.id);
   const mo = orders.filter(o => o.merchantId===user?.id);
 
-  const released     = mo.filter(o => o.status==="released");
-  const totalRevenue = released.reduce((s,o)=>s+o.merchantAmount,0);
-  const totalSales   = released.reduce((s,o)=>s+o.items.reduce((a,i)=>a+i.qty,0),0);
-  const pendingEscrow= mo.filter(o=>["submitted","verified","processing","shipped"].includes(o.status)).reduce((s,o)=>s+o.subtotal,0);
+  const released     = mo.filter(o => o.status==="released" || o.vendorStatus==="released");
+  const totalRevenue = released.reduce((s,o)=>s+(o.merchantAmount||0),0);
+  const totalSales   = released.reduce((s,o)=>s+(o.items||[]).reduce((a,i)=>a+(i.qty||0),0),0);
+  const pendingEscrow= mo.filter(o=>["submitted","verified","processing","shipped"].includes(o.status)).reduce((s,o)=>s+(o.subtotal||0),0);
   const totalViews   = mp.reduce((s,p)=>s+(p.views||0),0);
   const myReviews    = reviews.filter(r=>r.merchantId===user?.id);
   const avgR         = myReviews.length ? (myReviews.reduce((s,r)=>s+r.rating,0)/myReviews.length) : 0;
@@ -3677,9 +3677,9 @@ function MerchantAnalytics({ user, products, orders, nav, reviews=[] }) {
 
   /* top products by revenue */
   const prodRevenue = mp.map(p => {
-    const sales = released.filter(o => o.items.some(i=>i.productId===p.id));
-    const rev   = sales.reduce((s,o)=>{const item=o.items.find(i=>i.productId===p.id);return s+(item?(p.salePrice||p.price)*item.qty:0);},0);
-    const qty   = sales.reduce((s,o)=>{const item=o.items.find(i=>i.productId===p.id);return s+(item?item.qty:0);},0);
+    const sales = released.filter(o => (o.items||[]).some(i=>i.productId===p.id));
+    const rev   = sales.reduce((s,o)=>{const item=(o.items||[]).find(i=>i.productId===p.id);return s+(item?(p.salePrice||p.price)*item.qty:0);},0);
+    const qty   = sales.reduce((s,o)=>{const item=(o.items||[]).find(i=>i.productId===p.id);return s+(item?item.qty:0);},0);
     return {...p,rev,qty};
   }).sort((a,b)=>b.rev-a.rev);
 
@@ -3691,7 +3691,7 @@ function MerchantAnalytics({ user, products, orders, nav, reviews=[] }) {
   }).reverse();
   const monthlyData = months.map(m => ({
     ...m,
-    revenue: released.filter(o=>o.createdAt?.startsWith(m.key)).reduce((s,o)=>s+o.merchantAmount,0),
+    revenue: released.filter(o=>o.createdAt?.startsWith(m.key)).reduce((s,o)=>s+(o.merchantAmount||0),0),
     orders:  released.filter(o=>o.createdAt?.startsWith(m.key)).length
   }));
   const maxRev = Math.max(...monthlyData.map(m=>m.revenue),1);
@@ -4401,7 +4401,7 @@ function PlatformAnalytics({ orders, users, products }) {
   // Top merchants
   const merchantRevenue = merchants.map(m => {
     const mo = released.filter(o => o.merchantId===m.id);
-    return { name: m.storeName||m.name, revenue: mo.reduce((s,o)=>s+o.merchantAmount,0), orders: mo.length };
+    return { name: m.storeName||m.name, revenue: mo.reduce((s,o)=>s+(o.merchantAmount||0),0), orders: mo.length };
   }).sort((a,b)=>b.revenue-a.revenue).slice(0,5);
 
   // Status breakdown
@@ -4411,7 +4411,7 @@ function PlatformAnalytics({ orders, users, products }) {
 
   // Category revenue
   const catRevenue = {};
-  released.forEach(o => o.items.forEach(i => {
+  released.forEach(o => (o.items||[]).forEach(i => {
     const p = products.find(p=>p.id===i.productId);
     const cat = p?.category||"Otro";
     catRevenue[cat]=(catRevenue[cat]||0)+(p?.salePrice||p?.price||0)*i.qty;
