@@ -3411,8 +3411,6 @@ function PayoutsPage({ user, users, orders, nav, requestPayout, payReqs, setPayR
     setRequesting(true);
     await requestPayout(a);
     setAmount("");
-    const updated = await (async()=>{try{const r=await window.storage?.get("v5_preqs");return r?.value?JSON.parse(r.value):[];}catch{return [];}})();
-    if(setPayReqs) setPayReqs(updated);
     setRequesting(false);
   };
 
@@ -3521,6 +3519,7 @@ function PayoutsPage({ user, users, orders, nav, requestPayout, payReqs, setPayR
       {!walletBalance && !myReqs.length && (
         <div style={{textAlign:"center",padding:40,color:C.muted}}><div style={{fontSize:44}}>💸</div><div style={{marginTop:10,fontWeight:600}}>Tu bolsa está vacía</div><div style={{fontSize:12,marginTop:5}}>Los fondos se acumulan al confirmar entregas</div></div>
       )}
+    </div>
     </MerchantShell>
   );
 }
