@@ -72,49 +72,6 @@ const censorContact = (text) => {
   return out;
 };
 
-/* ═══════════════════════════════════════════════
-   SUPABASE CLIENT
-   Reemplaza estos dos valores con los de tu proyecto:
-   Supabase Dashboard → Project Settings → API
-═══════════════════════════════════════════════ */
-const SUPABASE_URL      = "REEMPLAZA_CON_TU_PROJECT_URL";
-const SUPABASE_ANON_KEY = "REEMPLAZA_CON_TU_ANON_KEY";
-const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-/* ── DB ↔ App transforms ──────────────────────────────────────
-   La BD guarda columnas indexadas + un campo JSONB `data`.
-   fromDB: convierte fila de BD → objeto que usa el app
-   toDB:   convierte objeto del app → fila para la BD
-──────────────────────────────────────────────────────────────*/
-const fromDB = {
-  profile: r => r ? ({...r.data, id:r.id, email:r.email, role:r.role, emailVerified:r.email_verified, active:r.active!==false, joinedAt:r.created_at}) : null,
-  product: r => r ? ({...r.data, id:r.id, merchantId:r.merchant_id, category:r.category, active:r.active!==false, createdAt:r.created_at}) : null,
-  order:   r => r ? ({...r.data, id:r.id, buyerId:r.buyer_id, status:r.status, createdAt:r.created_at}) : null,
-  notif:   r => r ? ({...r.data, id:r.id, userId:r.user_id, read:r.read||false, createdAt:r.created_at}) : null,
-  payReq:  r => r ? ({...r.data, id:r.id, merchantId:r.merchant_id, status:r.status, requestedAt:r.created_at}) : null,
-};
-const toDB = {
-  profile: u => {
-    const {id,email,role,emailVerified,active,joinedAt,...rest} = u;
-    return {id, email, role:role||"buyer", email_verified:emailVerified||false, active:active!==false, data:rest};
-  },
-  product: p => {
-    const {id,merchantId,category,active,createdAt,...rest} = p;
-    return {id, merchant_id:merchantId, category, active:active!==false, created_at:createdAt||new Date().toISOString(), data:rest};
-  },
-  order: o => {
-    const {id,buyerId,status,createdAt,...rest} = o;
-    return {id, buyer_id:buyerId, status, created_at:createdAt||new Date().toISOString(), data:rest};
-  },
-  notif: n => {
-    const {id,userId,read,createdAt,...rest} = n;
-    return {id, user_id:userId, read:read||false, created_at:createdAt||new Date().toISOString(), data:rest};
-  },
-  payReq: r => {
-    const {id,merchantId,status,requestedAt,...rest} = r;
-    return {id, merchant_id:merchantId, status:status||"pending", created_at:requestedAt||new Date().toISOString(), data:rest};
-  },
-};
 
 /* ── Memory cache (solo para el tipo de cambio) ── */
 const MEM = {};
