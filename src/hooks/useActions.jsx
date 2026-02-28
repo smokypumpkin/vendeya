@@ -45,6 +45,12 @@ export function useActions() {
       toast(msg, true)
       return { error: msg }
     }
+    // Supabase returns data.user=null when email enumeration protection is on (duplicate email)
+    if (!data?.user) {
+      const msg = 'No se pudo crear la cuenta. Intenta con otro email.'
+      toast(msg, true)
+      return { error: msg }
+    }
     // Only upsert if there is an active session (email confirmation not required)
     if (data?.session) {
       await profilesApi.upsertOwn({ ...meta, email, role, emailVerified: false, walletBalance: 0 })

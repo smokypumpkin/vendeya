@@ -2150,6 +2150,7 @@ function AuthPage({ login,register,verifyEmail,nav,initMode="login",params={} })
       if(!name||!email||!pw||!location) { setErr("Completa todos los campos."); setLoading(false); return; }
       const r = await register({name,email,password:pw,role,location,...(role==="merchant"?{storeName:storeN||`${name} Store`,storeDesc:storeD,storeLogo,bankData}:{storeName:"",storeDesc:""})});
       if(r.error) { setErr(r.error); setLoading(false); return; }
+      if(!r.user) { setErr("Error al crear cuenta. Intenta de nuevo."); setLoading(false); return; }
       const c = gC(); setVs({userId:r.user.id,code:c,email});
     }
     setLoading(false);
