@@ -30,13 +30,26 @@ export const profilesApi = {
   },
 
   async get(id) {
-    const { data, error } = await sb.from('profiles').select('*').eq('id', id).single()
+    const { data, error } = await sb.from('profiles').select('*').eq('id', id).maybeSingle()
     return { data: toProfile(data), error }
   },
 
   async upsertOwn(profileFields) {
     const { error } = await sb.rpc('upsert_own_profile', { profile_data: profileFields })
-    return { error }
+    if (!error) return { error: null }
+    // Fallback: direct upsert when the RPC doesn't exist or fails
+    const { data: { user } } = await sb.auth.getUser()
+    if (!user) return { error }
+    const { role, emailVerified, email: pfEmail, ...dataFields } = profileFields
+    const { error: e2 } = await sb.from('profiles').upsert({
+      id: user.id,
+      email: pfEmail || user.email,
+      role: role || 'buyer',
+      email_verified: emailVerified || false,
+      active: true,
+      data: dataFields,
+    }, { onConflict: 'id' })
+    return { error: e2 }
   },
 
   async adminVerify(targetId) {

@@ -154,6 +154,28 @@ export function StoreProvider({ children }) {
   useEffect(() => {
     let unsubRealtime
 
+    // Fetch profile; if missing, create it from auth metadata then re-fetch
+    const ensureProfile = async (authUser) => {
+      let { data: profile } = await profilesApi.get(authUser.id)
+      if (!profile) {
+        const m = authUser.user_metadata || {}
+        await profilesApi.upsertOwn({
+          email: authUser.email,
+          role: m.role || 'buyer',
+          name: m.name || '',
+          location: m.location || '',
+          storeName: m.storeName || '',
+          storeDesc: m.storeDesc || '',
+          storeLogo: m.storeLogo || '',
+          emailVerified: !!authUser.email_confirmed_at,
+          walletBalance: 0,
+        })
+        const { data: refetched } = await profilesApi.get(authUser.id)
+        profile = refetched
+      }
+      return profile
+    }
+
     const boot = async () => {
       // 1. Public data first — works without auth
       await loadPublic()
@@ -169,7 +191,7 @@ export function StoreProvider({ children }) {
       // 3. Restore existing session
       const { data: { session } } = await authApi.getSession()
       if (session?.user) {
-        const { data: profile } = await profilesApi.get(session.user.id)
+        const profile = await ensureProfile(session.user)
         if (profile) {
           dispatch({ type: 'SET_USER', payload: profile })
           sessionRef.current = session
@@ -205,7 +227,7 @@ export function StoreProvider({ children }) {
     // 5. Auth state changes (login from another tab, deep-link OAuth, etc.)
     const { data: { subscription } } = authApi.onAuthChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session?.user) {
-        const { data: profile } = await profilesApi.get(session.user.id)
+        const profile = await ensureProfile(session.user)
         if (profile) {
           dispatch({ type: 'SET_USER', payload: profile })
           sessionRef.current = session
