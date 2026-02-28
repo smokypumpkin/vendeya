@@ -6,8 +6,6 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { useAppState, useToast } from "./store/index.jsx"
 import { useActions } from "./hooks/useActions.jsx"
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
-
 /* ═══════════════════════════════════════════════
    BRAND TOKENS
 ═══════════════════════════════════════════════ */
@@ -1714,8 +1712,8 @@ function MerchantProfile({ users,products,orders,params,nav,user,toggleFollow,ad
 
   const mp       = products.filter(p => p.merchantId===merchant.id && p.active && p.stock>0).sort((a,b)=>(a.salePrice||a.price)-(b.salePrice||b.price));
   const released = orders.filter(o => o.merchantId===merchant.id && o.status==="released");
-  const reviews  = orders.filter(o => o.merchantId===merchant.id && o.review).map(o => ({...o.review,buyerName:o.buyerName}));
-  const avgR     = reviews.length ? reviews.reduce((s,r)=>s+r.rating,0)/reviews.length : 0;
+  const storeRevs = orders.filter(o => o.merchantId===merchant.id && o.review).map(o => ({...o.review,buyerName:o.buyerName}));
+  const avgR      = storeRevs.length ? storeRevs.reduce((s,r)=>s+r.rating,0)/storeRevs.length : 0;
   const isF      = (user?.following||[]).includes(merchant.id);
   const years    = Math.max(1, new Date().getFullYear()-new Date(merchant.joinedAt).getFullYear());
   const fl       = (merchant.followers||[]).length;
