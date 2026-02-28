@@ -1,27 +1,12 @@
 /**
  * App.jsx — VendeYApp UI Root
- *
- * Architecture:
- *   This file contains ONLY UI components and the router shell.
- *   ALL business logic lives in:
- *     - store/index.js     (state management via useReducer)
- *     - hooks/useActions.js (business logic, API orchestration)
- *     - api/index.js       (data access layer — only place touching Supabase)
- *     - lib/transforms.js  (pure DB row → app object converters)
- *
- * What this file does NOT do:
- *   - Call Supabase directly
- *   - Manage global state
- *   - Handle authentication lifecycle
- *   - Store data in localStorage (except cart, which is a UX concern)
- *
- * Every component gets data from: useAppState()
- * Every mutation goes through:   useActions()
+ * State: store/index.jsx | Logic: hooks/useActions.jsx | API: api/index.jsx
  */
-
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { useAppState, useToast } from "./store/index.jsx"
 import { useActions } from "./hooks/useActions.jsx"
+
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 /* ═══════════════════════════════════════════════
    BRAND TOKENS
@@ -32,10 +17,21 @@ const C = {
   gold:"#E59B00",goldL:"#FEF3DC",
   green:"#0F7A3C",greenL:"#E6F4ED",
   amber:"#B45309",amberL:"#FEF3C7",
+  teal:"#0A7E75",tealL:"#E0F4F2",   /* beneficio logístico — envío, gratis */
+  slate:"#3D4A5C",slateL:"#EDF0F3", /* condición neutra — Usado */
   bg:"#F3F1EB",white:"#FFFFFF",border:"#DDD8CE",
   light:"#ECE9E0",text:"#111827",muted:"#5C5C72",
   purple:"#6D28D9",purpleL:"#EDE9FE"
 };
+
+/* ─── TAG DESIGN SYSTEM ───────────────────────────────────────
+   Roles semánticos de color en tags de producto:
+   NAVY  → Identidad / condición "Nuevo"  (marca)
+   SLATE → Condición secundaria "Usado"   (neutro)
+   RED   → Acción de precio "-X%"         (urgencia de compra)
+   AMBER → Escasez "¡Último!"             (urgencia de stock)
+   TEAL  → Beneficio logístico "GRATIS"   (propuesta de valor)
+   ──────────────────────────────────────────────────────────── */
 const Fh = "'Sora',sans-serif";
 const Fb = "'Plus Jakarta Sans',sans-serif";
 
@@ -56,22 +52,79 @@ const ago  = d  => {
   if(s<86400) return `${~~(s/3600)}h`;
   return fD(d);
 };
+const gC  = () => Math.floor(100000+Math.random()*900000).toString();
 const addDays = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r.toISOString(); };
 
 const censorContact = (text) => {
   if(!text || typeof text !== "string") return text || "";
   let out = text;
+  // Emails
   out = out.replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, "[correo oculto]");
+  // Venezuelan mobiles: 0412, 0414, 0416, 0424, 0426 — all formats
   out = out.replace(/(?:\+?58)?[-\s.]?0?(4(?:1[2-6]|2[46]))[-\s.]?\d{3}[-\s.]?\d{4}/g, "[número oculto]");
+  // 7+ digit sequences (catch obfuscated numbers like "04121234567" or "412-123-4567")
   out = out.replace(/(?<![\d\-])\d[\d\s.\-]{6,14}\d(?![\d\-])/g, m => {
     const digits = m.replace(/\D/g,'');
     return digits.length >= 7 ? "[número oculto]" : m;
   });
+  // WhatsApp / Telegram links
   out = out.replace(/(?:wa|t)\.me\/[\w+]+/gi, "[enlace oculto]");
+  // Explicit social/contact keyword followed by handle
   out = out.replace(/(?:whatsapp|telegram|signal|instagram|ig|escríbeme|contactame?|llámame|escribeme|dm)\s*:?\s*@?[\w.\-]{2,30}/gi, "[contacto oculto]");
   return out;
 };
 
+/* ═══════════════════════════════════════════════
+   SUPABASE CLIENT
+   Reemplaza estos dos valores con los de tu proyecto:
+   Supabase Dashboard → Project Settings → API
+═══════════════════════════════════════════════ */
+const SUPABASE_URL      = "REEMPLAZA_CON_TU_PROJECT_URL";
+const SUPABASE_ANON_KEY = "REEMPLAZA_CON_TU_ANON_KEY";
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ── DB ↔ App transforms ──────────────────────────────────────
+   La BD guarda columnas indexadas + un campo JSONB `data`.
+   fromDB: convierte fila de BD → objeto que usa el app
+   toDB:   convierte objeto del app → fila para la BD
+──────────────────────────────────────────────────────────────*/
+const fromDB = {
+  profile: r => r ? ({...r.data, id:r.id, email:r.email, role:r.role, emailVerified:r.email_verified, active:r.active!==false, joinedAt:r.created_at}) : null,
+  product: r => r ? ({...r.data, id:r.id, merchantId:r.merchant_id, category:r.category, active:r.active!==false, createdAt:r.created_at}) : null,
+  order:   r => r ? ({...r.data, id:r.id, buyerId:r.buyer_id, status:r.status, createdAt:r.created_at}) : null,
+  notif:   r => r ? ({...r.data, id:r.id, userId:r.user_id, read:r.read||false, createdAt:r.created_at}) : null,
+  payReq:  r => r ? ({...r.data, id:r.id, merchantId:r.merchant_id, status:r.status, requestedAt:r.created_at}) : null,
+};
+const toDB = {
+  profile: u => {
+    const {id,email,role,emailVerified,active,joinedAt,...rest} = u;
+    return {id, email, role:role||"buyer", email_verified:emailVerified||false, active:active!==false, data:rest};
+  },
+  product: p => {
+    const {id,merchantId,category,active,createdAt,...rest} = p;
+    return {id, merchant_id:merchantId, category, active:active!==false, created_at:createdAt||new Date().toISOString(), data:rest};
+  },
+  order: o => {
+    const {id,buyerId,status,createdAt,...rest} = o;
+    return {id, buyer_id:buyerId, status, created_at:createdAt||new Date().toISOString(), data:rest};
+  },
+  notif: n => {
+    const {id,userId,read,createdAt,...rest} = n;
+    return {id, user_id:userId, read:read||false, created_at:createdAt||new Date().toISOString(), data:rest};
+  },
+  payReq: r => {
+    const {id,merchantId,status,requestedAt,...rest} = r;
+    return {id, merchant_id:merchantId, status:status||"pending", created_at:requestedAt||new Date().toISOString(), data:rest};
+  },
+};
+
+/* ── Memory cache (solo para el tipo de cambio) ── */
+const MEM = {};
+
+
+/* ═══════════════════════════════════════════════
+   IMAGE COMPRESS
+═══════════════════════════════════════════════ */
 function readB64(file) {
   return new Promise(res => {
     if(!file) return res(null);
@@ -138,14 +191,97 @@ const PAY = [
   {id:"zelle",    label:"Zelle",    icon:"💵",desc:"USD desde banca americana",      color:"#5A24DB"},
   {id:"card",     label:"Tarjeta",  icon:"💳",desc:"Visa/Mastercard USD",            color:C.red}
 ];
-
-
+const ST = {
+  pending:    {l:"Esperando Pago",     c:"#92400E",bg:"#FEF3C7"},
+  submitted:  {l:"Pago Enviado ⏳",   c:C.navy,   bg:C.navyL},
+  verified:   {l:"Verificado ✓",      c:C.green,  bg:C.greenL},
+  processing: {l:"Preparando 📦",     c:"#5B21B6",bg:"#EDE9FE"},
+  shipped:    {l:"En Camino 🚚",      c:"#0369A1",bg:"#E0F2FE"},
+  released:   {l:"Completado ✅",     c:"#065F46",bg:C.greenL},
+  disputed:   {l:"En Disputa ⚠️",    c:"#991B1B",bg:C.redL},
+  rejected:   {l:"Pago Rechazado ✗", c:"#991B1B",bg:C.redL},
+  expired:    {l:"Expirado ⏰",       c:C.muted,  bg:C.light},
+  pending_payout:{l:"Pago Pendiente 💸",c:"#5B21B6",bg:"#EDE9FE"},
+  paid_out:   {l:"Liquidado ✅",      c:"#065F46",bg:C.greenL}
+};
+// Pickup-specific status label overrides (no "shipped" step — merchant confirms → released directly)
+const ST_PICKUP = {...ST,
+  processing:{...ST.processing, l:"Listo p/ Retirar 🏪", c:"#065F46", bg:C.greenL},
+};
+// Delivery flow: pending → submitted → verified → processing → shipped → released
+const FLOW_DELIVERY = ["pending","submitted","verified","processing","shipped","released"];
+const FL_DELIVERY   = {pending:"Esperando pago",submitted:"Pago enviado",verified:"Verificado",processing:"Preparando",shipped:"En camino 🚚",released:"Completado"};
+// Pickup flow:   pending → submitted → verified → processing → released  (no "shipped" — merchant confirms pickup → funds released directly)
+const FLOW_PICKUP   = ["pending","submitted","verified","processing","released"];
+const FL_PICKUP     = {pending:"Esperando pago",submitted:"Pago enviado",verified:"Verificado",processing:"Listo p/ Retirar 🏪",released:"Completado ✅"};
+const KW   = ["iPhone","Samsung","PlayStation","AirPods","Laptop","Zapatos","Nike","Adidas","Bolso","Nevera","Televisor","Café","Reloj","Bicicleta","Ropa","Mueble","Perfume","Bicicleta"];
 
 const PAYMENT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-
+const PAYOUT_HOURS_MIN = 48;
+const PAYOUT_HOURS_MAX = 72;
+const PLATFORM_FEE_PCT = 0.03; // 3% platform commission
 const DEFAULT_MIN_PAYOUT = 10; // $10 minimum, configurable from admin
 
+/* ═══════════════════════════════════════════════
+   SEED DATA
+═══════════════════════════════════════════════ */
+const SU = [
+  {id:"admin1",name:"Admin VendeYApp",email:"admin@vendeya.com",password:"admin2024",role:"admin",emailVerified:true,merchantVerified:false,joinedAt:"2023-01-01",following:[],followers:[],storeName:"",storeDesc:"",location:"Caracas, Distrito Capital"},
+  {id:"m2",name:"María Rodríguez",email:"maria@demo.com",password:"1234",role:"merchant",emailVerified:true,merchantVerified:true,joinedAt:"2023-07-05",storeName:"ModaCaracas",storeDesc:"Moda, calzado y accesorios originales para toda Venezuela. Envíos desde Valencia.",location:"Valencia, Carabobo",pickupAddress:"Av. Bolívar Norte, C.C. Prebo, Local 45-B, Valencia. Mar-Dom 9am-7pm",pickupSchedule:"Martes a Domingo, 9:00am – 7:00pm",following:[],followers:["u1"],bankData:{bank:"Mercantil",account:"01050987654321098765",rif:"J-98765432-1",phone:"0414-9876543",accountHolder:"María Rodríguez"},walletBalance:42.00},
+  {id:"m3",name:"Alejandro Fuentes",email:"alex@demo.com",password:"1234",role:"merchant",emailVerified:true,merchantVerified:true,joinedAt:"2023-05-20",storeName:"HogarVzla",storeDesc:"Todo para el hogar y la cocina. Electrodomésticos, decoración y más.",location:"Maracaibo, Zulia",following:[],followers:[],bankData:{bank:"Venezuela",account:"01020456789012345678",rif:"J-44444444-4",phone:"0261-1234567",accountHolder:"Alejandro Fuentes"},walletBalance:88.50},
+  {id:"m4",name:"Gabriela Torres",email:"gabi@demo.com",password:"1234",role:"merchant",emailVerified:true,merchantVerified:true,joinedAt:"2023-09-01",storeName:"SportLife VE",storeDesc:"Ropa deportiva, suplementos y equipos fitness. ¡Vive activo!",location:"Barquisimeto, Lara",following:[],followers:[],bankData:{bank:"Banesco",account:"01340987654321012345",rif:"J-55555555-5",phone:"0251-7654321",accountHolder:"Gabriela Torres"},walletBalance:22.00},
+  {id:"m5",name:"Roberto Salcedo",email:"roberto@demo.com",password:"1234",role:"merchant",emailVerified:true,merchantVerified:false,joinedAt:"2024-01-10",storeName:"LibrosVE",storeDesc:"Libros nuevos y usados, papelería y artículos educativos.",location:"Mérida, Mérida",following:[],followers:[],bankData:{bank:"Provincial",account:"01080123456789012345",rif:"J-66666666-6",phone:"0274-1234567",accountHolder:"Roberto Salcedo"},walletBalance:0},
+  {id:"u1",name:"Pedro López",email:"pedro@demo.com",password:"1234",role:"buyer",emailVerified:true,merchantVerified:false,joinedAt:"2023-09-20",storeName:"",storeDesc:"",location:"Caracas, Distrito Capital",following:["m1","m2"],followers:[]},
+  {id:"u2",name:"Ana Martínez",email:"ana@demo.com",password:"1234",role:"buyer",emailVerified:true,merchantVerified:false,joinedAt:"2023-11-05",storeName:"",storeDesc:"",location:"Valencia, Carabobo",following:["m1"],followers:[]},
+];
+const SP = [
+  /* ── TechVzla Store (m1) ── */
+  {id:"p1",merchantId:"m1",merchantName:"TechVzla Store",merchantLoc:"Caracas, Distrito Capital",name:"iPhone 13 128GB Negro",price:450,salePrice:null,category:"Tecnología",condition:"used",stock:3,active:true,views:142,image:"https://images.unsplash.com/photo-1632661674596-df8be070a5c5?w=600&q=70",images:["https://images.unsplash.com/photo-1632661674596-df8be070a5c5?w=600&q=70","https://images.unsplash.com/photo-1592286927505-1def25115558?w=600&q=70"],description:"iPhone 13 en perfectas condiciones. Batería 93%. Caja y cargador originales. Liberado para todas las operadoras.",questions:[{id:"q1",buyerId:"u1",buyerName:"Pedro López",question:"¿Tiene garantía?",answer:"Sí, 30 días de garantía por defecto.",answeredAt:"2024-01-14T12:00:00",createdAt:"2024-01-14T10:00:00"},{id:"q2",buyerId:"u2",buyerName:"Ana Martínez",question:"¿Hace Face ID correctamente?",answer:null,answeredAt:null,createdAt:"2024-02-01T09:00:00"}],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-5",shippingCost:5,freeShipping:false,createdAt:"2024-01-01T00:00:00"},
+  {id:"p2",merchantId:"m1",merchantName:"TechVzla Store",merchantLoc:"Caracas, Distrito Capital",name:"AirPods Pro 2da Generación",price:190,salePrice:155,category:"Tecnología",condition:"new",stock:8,active:true,views:89,image:"https://images.unsplash.com/photo-1600294037681-c80b4cb5b434?w=600&q=70",images:["https://images.unsplash.com/photo-1600294037681-c80b4cb5b434?w=600&q=70"],description:"AirPods Pro 2da gen. Cancelación de ruido activa, estuche MagSafe. Sellados en caja.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"2-4",shippingCost:0,freeShipping:true,createdAt:"2024-01-05T00:00:00"},
+  {id:"p5",merchantId:"m1",merchantName:"TechVzla Store",merchantLoc:"Caracas, Distrito Capital",name:"Monitor LG 27 4K UHD",price:280,salePrice:249,category:"Tecnología",condition:"new",stock:2,active:true,views:115,image:"https://images.unsplash.com/photo-1527443224154-c4a573d5b7a3?w=600&q=70",images:["https://images.unsplash.com/photo-1527443224154-c4a573d5b7a3?w=600&q=70"],description:"LG 27 pulgadas 4K IPS, 60Hz, HDR10. Cable HDMI incluido. Sellado en caja.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-5",shippingCost:10,freeShipping:false,createdAt:"2024-01-20T00:00:00"},
+  {id:"p9",merchantId:"m1",merchantName:"TechVzla Store",merchantLoc:"Caracas, Distrito Capital",name:"MacBook Air M2 8GB 256GB",price:980,salePrice:920,category:"Tecnología",condition:"new",stock:1,active:true,views:310,image:"https://images.unsplash.com/photo-1611186871525-46e5c92a4a67?w=600&q=70",images:["https://images.unsplash.com/photo-1611186871525-46e5c92a4a67?w=600&q=70"],description:"MacBook Air M2 color Midnight. 8GB RAM, 256GB SSD. Garantía Apple 1 año. Sin uso.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"2-4",shippingCost:0,freeShipping:true,createdAt:"2024-02-01T00:00:00"},
+  {id:"p10",merchantId:"m1",merchantName:"TechVzla Store",merchantLoc:"Caracas, Distrito Capital",name:"Samsung Galaxy S24 Ultra 256GB",price:860,salePrice:null,category:"Tecnología",condition:"new",stock:4,active:true,views:203,image:"https://images.unsplash.com/photo-1610945265064-0e34e5519bbf?w=600&q=70",images:["https://images.unsplash.com/photo-1610945265064-0e34e5519bbf?w=600&q=70"],description:"Samsung Galaxy S24 Ultra 256GB. Titanio negro. Cámara 200MP, S-Pen incluido. Sellado.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-5",shippingCost:8,freeShipping:false,createdAt:"2024-02-10T00:00:00"},
+  {id:"p11",merchantId:"m1",merchantName:"TechVzla Store",merchantLoc:"Caracas, Distrito Capital",name:"PlayStation 5 Slim + 2 Joysticks",price:550,salePrice:499,category:"Tecnología",condition:"new",stock:2,active:true,views:445,image:"https://images.unsplash.com/photo-1607853202273-797f1c22a38e?w=600&q=70",images:["https://images.unsplash.com/photo-1607853202273-797f1c22a38e?w=600&q=70"],description:"PS5 Slim edición digital con dos controles DualSense. Sin juegos incluidos. Sellado en caja.",questions:[],allowsPickup:true,allowsDelivery:false,deliveryDays:"",shippingCost:0,freeShipping:false,createdAt:"2024-02-15T00:00:00"},
+  /* ── ModaCaracas (m2) ── */
+  {id:"p3",merchantId:"m2",merchantName:"ModaCaracas",merchantLoc:"Valencia, Carabobo",name:"Nike Air Max 270 Talla 42",price:95,salePrice:79,category:"Moda",condition:"new",stock:10,active:true,views:201,image:"https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&q=70",images:["https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&q=70","https://images.unsplash.com/photo-1606107557195-0e29a4b5b4aa?w=600&q=70"],description:"Nike Air Max 270 T42. Nuevas en caja. 100% auténticas con etiquetas.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"4-7",shippingCost:6,freeShipping:false,createdAt:"2024-01-10T00:00:00"},
+  {id:"p4",merchantId:"m2",merchantName:"ModaCaracas",merchantLoc:"Valencia, Carabobo",name:"Bolso Michael Kors Original",price:120,salePrice:null,category:"Moda",condition:"new",stock:2,active:true,views:67,image:"https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=600&q=70",images:["https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=600&q=70"],description:"Bolso MK original. Negro, talla mediana. Certificado de autenticidad incluido.",questions:[],allowsPickup:false,allowsDelivery:true,deliveryDays:"5-8",shippingCost:7,freeShipping:false,createdAt:"2024-01-15T00:00:00"},
+  {id:"p12",merchantId:"m2",merchantName:"ModaCaracas",merchantLoc:"Valencia, Carabobo",name:"Vestido Casual de Verano",price:38,salePrice:28,category:"Moda",condition:"new",stock:15,active:true,views:88,image:"https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=600&q=70",images:["https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=600&q=70"],description:"Vestido floral tallas S/M/L/XL disponibles. Tela liviana, perfecto para el clima venezolano.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"4-6",shippingCost:4,freeShipping:false,createdAt:"2024-02-05T00:00:00"},
+  {id:"p13",merchantId:"m2",merchantName:"ModaCaracas",merchantLoc:"Valencia, Carabobo",name:"Perfume Armani Code 100ml",price:85,salePrice:72,category:"Moda",condition:"new",stock:6,active:true,views:134,image:"https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?w=600&q=70",images:["https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?w=600&q=70"],description:"Armani Code Homme 100ml. Original sellado. Fragancia maderada y especiada.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-5",shippingCost:0,freeShipping:true,createdAt:"2024-02-12T00:00:00"},
+  /* ── HogarVzla (m3) ── */
+  {id:"p14",merchantId:"m3",merchantName:"HogarVzla",merchantLoc:"Maracaibo, Zulia",name:"Cafetera Nespresso Vertuo",price:145,salePrice:119,category:"Hogar",condition:"new",stock:5,active:true,views:167,image:"https://images.unsplash.com/photo-1520970014086-2208d157c9e2?w=600&q=70",images:["https://images.unsplash.com/photo-1520970014086-2208d157c9e2?w=600&q=70"],description:"Cafetera Nespresso Vertuo Pop. Cápsulas compatibles. Capacidad 600ml. Sellada con garantía.",questions:[{id:"q3",buyerId:"u1",buyerName:"Pedro López",question:"¿Las cápsulas están incluidas?",answer:null,answeredAt:null,createdAt:"2024-02-20T08:00:00"}],allowsPickup:true,allowsDelivery:true,deliveryDays:"5-8",shippingCost:8,freeShipping:false,createdAt:"2024-01-25T00:00:00"},
+  {id:"p15",merchantId:"m3",merchantName:"HogarVzla",merchantLoc:"Maracaibo, Zulia",name:"Silla de Escritorio Ergonómica",price:190,salePrice:165,category:"Hogar",condition:"new",stock:3,active:true,views:92,image:"https://images.unsplash.com/photo-1592078615290-033ee584e267?w=600&q=70",images:["https://images.unsplash.com/photo-1592078615290-033ee584e267?w=600&q=70"],description:"Silla gaming/oficina con soporte lumbar, apoyabrazos 4D, altura ajustable. Carga hasta 130kg.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"5-10",shippingCost:15,freeShipping:false,createdAt:"2024-02-01T00:00:00"},
+  {id:"p16",merchantId:"m3",merchantName:"HogarVzla",merchantLoc:"Maracaibo, Zulia",name:"Licuadora Oster 1200W",price:55,salePrice:null,category:"Hogar",condition:"new",stock:12,active:true,views:56,image:"https://images.unsplash.com/photo-1570197788417-0e82375c9371?w=600&q=70",images:["https://images.unsplash.com/photo-1570197788417-0e82375c9371?w=600&q=70"],description:"Licuadora Oster 6 velocidades 1200W. Jarra de vidrio 1.5L. Resistente y silenciosa.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"4-7",shippingCost:6,freeShipping:false,createdAt:"2024-02-08T00:00:00"},
+  {id:"p17",merchantId:"m3",merchantName:"HogarVzla",merchantLoc:"Maracaibo, Zulia",name:"Juego de Sábanas King Premium",price:42,salePrice:35,category:"Hogar",condition:"new",stock:20,active:true,views:44,image:"https://images.unsplash.com/photo-1615874959474-d609969a20ed?w=600&q=70",images:["https://images.unsplash.com/photo-1615874959474-d609969a20ed?w=600&q=70"],description:"Sábanas king 600 hilos, algodón egipcio. Set completo: sabana plana, ajustable y 2 fundas.",questions:[],allowsPickup:false,allowsDelivery:true,deliveryDays:"4-6",shippingCost:5,freeShipping:false,createdAt:"2024-02-14T00:00:00"},
+  /* ── SportLife VE (m4) ── */
+  {id:"p18",merchantId:"m4",merchantName:"SportLife VE",merchantLoc:"Barquisimeto, Lara",name:"Whey Protein Gold Standard 5lb",price:75,salePrice:65,category:"Deportes",condition:"new",stock:25,active:true,views:189,image:"https://images.unsplash.com/photo-1593095948071-474c5cc2989d?w=600&q=70",images:["https://images.unsplash.com/photo-1593095948071-474c5cc2989d?w=600&q=70"],description:"ON Gold Standard 100% Whey 5lb Double Rich Chocolate. 24g proteína por scoop. Original sellado.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-6",shippingCost:0,freeShipping:true,createdAt:"2024-01-18T00:00:00"},
+  {id:"p19",merchantId:"m4",merchantName:"SportLife VE",merchantLoc:"Barquisimeto, Lara",name:"Guantes de Boxeo Everlast 16oz",price:48,salePrice:null,category:"Deportes",condition:"new",stock:8,active:true,views:63,image:"https://images.unsplash.com/photo-1549719386-74dfcbf7dbed?w=600&q=70",images:["https://images.unsplash.com/photo-1549719386-74dfcbf7dbed?w=600&q=70"],description:"Guantes Everlast Pro Style 16oz. Cuero sintético, relleno de espuma moldeable. Color negro.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"4-7",shippingCost:5,freeShipping:false,createdAt:"2024-01-28T00:00:00"},
+  {id:"p20",merchantId:"m4",merchantName:"SportLife VE",merchantLoc:"Barquisimeto, Lara",name:"Bicicleta Estática Spinning Pro",price:320,salePrice:275,category:"Deportes",condition:"new",stock:3,active:true,views:241,image:"https://images.unsplash.com/photo-1520395012680-dd3a3d4f08e4?w=600&q=70",images:["https://images.unsplash.com/photo-1520395012680-dd3a3d4f08e4?w=600&q=70"],description:"Bicicleta spinning profesional. Resistencia magnética, pantalla LCD, soporte tablet. Armado incluido.",questions:[],allowsPickup:true,allowsDelivery:false,deliveryDays:"",shippingCost:0,freeShipping:false,createdAt:"2024-02-06T00:00:00"},
+  {id:"p21",merchantId:"m4",merchantName:"SportLife VE",merchantLoc:"Barquisimeto, Lara",name:"Mancuernas Ajustables 40kg Set",price:89,salePrice:79,category:"Deportes",condition:"new",stock:10,active:true,views:112,image:"https://images.unsplash.com/photo-1583454110551-21f2fa2afe61?w=600&q=70",images:["https://images.unsplash.com/photo-1583454110551-21f2fa2afe61?w=600&q=70"],description:"Set mancuernas ajustables 2-40kg. 18 ajustes. Sistema de seguridad automático. Funda incluida.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"5-8",shippingCost:12,freeShipping:false,createdAt:"2024-02-18T00:00:00"},
+  /* ── LibrosVE (m5) ── */
+  {id:"p6",merchantId:"m5",merchantName:"LibrosVE",merchantLoc:"Mérida, Mérida",name:"Café Premium Mérida 1kg",price:18,salePrice:null,category:"Alimentos",condition:"new",stock:50,active:true,views:33,image:"https://images.unsplash.com/photo-1559056199-641a0ac8b55e?w=600&q=70",images:["https://images.unsplash.com/photo-1559056199-641a0ac8b55e?w=600&q=70"],description:"Café de especialidad región Mérida. Tostado medio, bolsa hermética resellable.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-6",shippingCost:4,freeShipping:false,createdAt:"2024-01-25T00:00:00"},
+  {id:"p22",merchantId:"m5",merchantName:"LibrosVE",merchantLoc:"Mérida, Mérida",name:"Atomic Habits - James Clear",price:12,salePrice:null,category:"Libros",condition:"new",stock:30,active:true,views:78,image:"https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&q=70",images:["https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=600&q=70"],description:"Atomic Habits en español. Edición tapa dura. Cómo crear buenos hábitos y eliminar los malos.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-7",shippingCost:3,freeShipping:false,createdAt:"2024-01-30T00:00:00"},
+  {id:"p23",merchantId:"m5",merchantName:"LibrosVE",merchantLoc:"Mérida, Mérida",name:"Pack 5 Libros de Autoayuda",price:45,salePrice:35,category:"Libros",condition:"new",stock:15,active:true,views:55,image:"https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=600&q=70",images:["https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=600&q=70"],description:"Pack: Hábitos Atómicos, El Poder del Ahora, Piensa y Hazte Rico, El Monje que Vendió su Ferrari, Padre Rico.",questions:[],allowsPickup:true,allowsDelivery:true,deliveryDays:"3-7",shippingCost:0,freeShipping:true,createdAt:"2024-02-20T00:00:00"},
+]
+const SO = [{
+  id:"ord01",buyerId:"u1",buyerName:"Pedro López",
+  paymentMethod:"zelle",paymentRef:"ZL-20240115-8893",paymentProofImg:null,
+  status:"verified",deliveryType:"delivery",address:"Urb. La Castellana, Caracas",
+  grandTotal:160,shippingTotal:5,
+  deadline:null,createdAt:"2024-01-15T10:00:00",updatedAt:"2024-01-20T15:00:00",
+  vendors:[{
+    merchantId:"m1",merchantName:"TechVzla Store",
+    items:[{productId:"p2",qty:1,product:SP[1]}],
+    subtotal:155,shippingCost:5,platformFee:4.80,merchantAmount:155.20,
+    status:"released",shippingGuide:null,
+    review:{rating:5,comment:"Excelente vendedor, producto impecable.",productId:"p2",productName:"AirPods Pro 2da Generación",productImage:"https://images.unsplash.com/photo-1600294037681-c80b4cb5b434?w=200&q=70",createdAt:"2024-01-20T15:00:00"},
+    payoutStatus:"paid_out",payoutScheduledAt:"2024-01-22T15:00:00",payoutCompletedAt:"2024-01-22T18:00:00",
+    disputeReason:null,disputeDesc:null,disputeAt:null,disputeResolution:null,disputeNote:null
+  }]
+}];
 
+/* ═══════════════════════════════════════════════
+   MICRO UI COMPONENTS
+═══════════════════════════════════════════════ */
 function Stars({ v=0, size=14, onChange }) {
   const [h, setH] = useState(0);
   return (
@@ -303,176 +439,171 @@ const card = {
 /* ═══════════════════════════════════════════════
    APP ROOT
 ═══════════════════════════════════════════════ */
-/* ═══════════════════════════════════════════════
-   APP ROOT — connects store to UI
-═══════════════════════════════════════════════ */
+function SchemaBase() {
+  useSchema([
+    {
+      "@context":"https://schema.org",
+      "@type":"WebSite",
+      "name":APP_NAME,
+      "url":APP_URL,
+      "description":APP_DESC,
+      "inLanguage":"es-VE",
+      "potentialAction":{
+        "@type":"SearchAction",
+        "target":{"@type":"EntryPoint","urlTemplate":APP_URL+"/browse?search={search_term_string}"},
+        "query-input":"required name=search_term_string"
+      }
+    },
+    {
+      "@context":"https://schema.org",
+      "@type":"Organization",
+      "name":APP_NAME,
+      "url":APP_URL,
+      "logo":APP_LOGO,
+      "description":APP_DESC,
+      "foundingLocation":{"@type":"Place","name":"Caracas, Venezuela"},
+      "areaServed":{"@type":"Country","name":"Venezuela"},
+      "contactPoint":{"@type":"ContactPoint","contactType":"customer service","availableLanguage":"Spanish"}
+    }
+  ]);
+  return null;
+}
+
 export default function App() {
-  const { ready, user, profiles, products, orders, reviews, notifs, favs, payReqs, appCfg, rate, cart, toast } = useAppState();
-  const showT = useToast();
-  const actions = useActions();
+  const { ready, user, profiles, products, orders, reviews, notifs, favs, payReqs, appCfg, rate, cart, toast } = useAppState()
+  const showT   = useToast()
+  const actions = useActions()
 
-  const [page,   setPage]   = useState("landing");
-  const [params, setParams] = useState({});
+  const [page,      setPage]      = useState("landing")
+  const [params,    setParams]    = useState({})
+  const [rateLabel, setRateLabel] = useState("BCV")
 
-  // Exchange rate label
-  const [rateLabel, setRateLabel] = useState("BCV");
-
-  // Fetch BCV rate (non-critical, UI only)
+  // Fetch BCV rate label
   useEffect(() => {
     const APIS = [
-      async () => {
-        const r = await fetch("https://ve.dolarapi.com/v1/dolares/oficial", {cache:"no-store"});
-        const d = await r.json();
-        return d?.promedio ?? d?.tasa ?? d?.precio;
-      },
-      async () => {
-        const r = await fetch("https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd", {cache:"no-store"});
-        const d = await r.json();
-        return d?.price ?? d?.data?.price;
-      },
-    ];
-    for(const api of APIS) {
-      (async () => {
-        try {
-          const v = await api();
-          if(v && +v > 30) {
-            // Store will handle this via SET_RATE dispatch — but store already fetches rate in boot
-            // This is just for rateLabel UI state
-            setRateLabel("BCV");
-          }
-        } catch {}
-      })();
-    }
-  }, []);
+      async () => { const r = await fetch("https://ve.dolarapi.com/v1/dolares/oficial",{cache:"no-store"}); const d = await r.json(); return d?.promedio??d?.tasa??d?.precio },
+      async () => { const r = await fetch("https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd",{cache:"no-store"}); const d = await r.json(); return d?.price??d?.data?.price },
+    ]
+    for(const api of APIS)(async()=>{ try{ const v=await api(); if(v&&+v>30) setRateLabel("BCV") }catch{} })()
+  }, [])
 
-  // URL-based routing (History API)
+  // History API routing
   const nav = useCallback((pg, ps={}) => {
-    setPage(pg);
-    setParams(ps);
-    window.scrollTo(0, 0);
-    const slug = pg === "landing" ? "/" : `/${pg}`;
-    window.history.pushState({ pg, ps }, "", slug);
-  }, []);
+    setPage(pg); setParams(ps); window.scrollTo(0,0)
+    window.history.pushState({pg,ps}, "", pg==="landing" ? "/" : `/${pg}`)
+  }, [])
 
   useEffect(() => {
-    const onPop = (e) => {
-      const state = e.state || { pg: "landing", ps: {} };
-      setPage(state.pg || "landing");
-      setParams(state.ps || {});
-      window.scrollTo(0, 0);
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
+    const onPop = e => { const s=e.state||{pg:"landing",ps:{}}; setPage(s.pg||"landing"); setParams(s.ps||{}); window.scrollTo(0,0) }
+    window.addEventListener("popstate", onPop)
+    return () => window.removeEventListener("popstate", onPop)
+  }, [])
 
-  // Derived state
-  const cartCount  = cart.reduce((s, i) => s + i.qty, 0);
-  const cartTotal  = cart.reduce((s, i) => s + (i.product.salePrice || i.product.price) * i.qty, 0);
-  const myNotifs   = notifs.filter(n => n.userId === user?.id).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const unread     = myNotifs.filter(n => !n.read && !n.done).length;
+  // Derived
+  const cartCount = cart.reduce((s,i)=>s+i.qty, 0)
+  const cartTotal = cart.reduce((s,i)=>s+(i.product.salePrice||i.product.price)*i.qty, 0)
+  const myNotifs  = notifs.filter(n=>n.userId===user?.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
+  const unread    = myNotifs.filter(n=>!n.read&&!n.done).length
 
-  // Context object — same shape as v5, so all components work without changes
+  // placeOrder — builds order from cart then calls action
+  const placeOrder = useCallback(async (method, ref, proofImg, address, deliveryType) => {
+    const fee      = appCfg?.platformFee || 5
+    const deadline = new Date(Date.now() + 10*60*1000).toISOString()
+    const now      = new Date().toISOString()
+    const pm       = PAY.find(m=>m.id===method)?.label||method
+
+    const byMerchant = {}
+    for(const item of cart) {
+      const mid = item.product.merchantId
+      if(!byMerchant[mid]) byMerchant[mid] = []
+      byMerchant[mid].push(item)
+    }
+    const vendors = Object.entries(byMerchant).map(([mid, mItems]) => {
+      const merch  = profiles.find(u=>u.id===mid)
+      const mSub   = mItems.reduce((s,i)=>s+(i.product.salePrice||i.product.price)*i.qty, 0)
+      const mShip  = deliveryType==="delivery" ? mItems.reduce((s,i)=>i.product.freeShipping?s:s+(+i.product.shippingCost||0), 0) : 0
+      const mTotal = mSub+mShip
+      const mFee   = +(mTotal*fee/100).toFixed(2)
+      return {
+        merchantId:mid, merchantName:merch?.storeName||merch?.name||"",
+        items:mItems, subtotal:mSub, shippingCost:mShip,
+        platformFee:mFee, merchantAmount:+(mTotal-mFee).toFixed(2),
+        status:"submitted", shippingGuide:null, review:null,
+        payoutStatus:null, payoutScheduledAt:null, payoutCompletedAt:null,
+        disputeReason:null, disputeDesc:null, disputeAt:null, disputeResolution:null,
+      }
+    })
+    const shippingTotal = vendors.reduce((s,v)=>s+v.shippingCost, 0)
+    const grandTotal    = vendors.reduce((s,v)=>s+v.subtotal+v.shippingCost, 0)
+    const orderId = uid()
+    const orderData = {
+      id:orderId, buyerId:user.id, buyerName:user.name||user.email,
+      paymentMethod:method, paymentRef:ref, paymentProofImg:proofImg,
+      status:"submitted", deliveryType, address,
+      grandTotal:+grandTotal.toFixed(2), shippingTotal:+shippingTotal.toFixed(2),
+      vendors, deadline, createdAt:now, updatedAt:now,
+      merchantId:vendors[0]?.merchantId||null,
+    }
+    const result = await actions.placeOrder(orderData)
+    if(!result?.error) nav("order-detail", {orderId})
+    return result
+  }, [cart, profiles, appCfg, user, actions, nav])
+
   const ctx = {
     // State
-    user, users: profiles, products, orders, reviews, cart, cartCount, cartTotal,
+    user, users:profiles, products, orders, reviews, cart, cartCount, cartTotal,
     page, params, rate, rateLabel, myNotifs, unread, favs, payReqs, appCfg,
-    // Navigation
-    nav,
-    // Toast
-    showT,
-    // Auth actions
+    // Navigation & UI
+    nav, showT,
+    // Auth
     login:          actions.login,
     logout:         actions.logout,
     register:       actions.register,
-    verifyEmail:    async (userId) => { /* handled by Supabase magic link */ },
-    // Profile actions
-    upU:            async (profilesArr) => { /* legacy compat — use updateProfile */ },
-    setUser:        () => {},  // handled by store
+    verifyEmail:    async () => {},
+    // Profile
+    upU:            async () => {},
+    setUser:        () => {},
     verifyMerchant: actions.adminVerifyMerchant,
     toggleDisable:  actions.adminToggleDisable,
-    // Product actions
-    upP:            async (productsArr) => { /* legacy compat — use saveProduct */ },
+    // Products
+    upP:            async () => {},
     adminDisableProduct:  actions.adminDisableProduct,
     adminEnableProduct:   actions.adminEnableProduct,
-    // Order actions
-    upO:            async (ordersArr) => { /* legacy compat */ },
-    placeOrder:     (method, ref, proofImg, address, deliveryType) => {
-      // Build order data from cart
-      const fee      = appCfg?.platformFee || 5;
-      const deadline = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-      const pm       = PAY.find(m => m.id === method)?.label || method;
-      const now      = new Date().toISOString();
-
-      const byMerchant = {};
-      for(const item of cart) {
-        const mid = item.product.merchantId;
-        if(!byMerchant[mid]) byMerchant[mid] = [];
-        byMerchant[mid].push(item);
-      }
-      const vendors = Object.entries(byMerchant).map(([mid, mItems]) => {
-        const merch   = profiles.find(u => u.id === mid);
-        const mSub    = mItems.reduce((s, i) => s + (i.product.salePrice || i.product.price) * i.qty, 0);
-        const mShip   = deliveryType === "delivery" ? mItems.reduce((s, i) => i.product.freeShipping ? s : s + (+i.product.shippingCost || 0), 0) : 0;
-        const mTotal  = mSub + mShip;
-        const mFee    = +(mTotal * fee / 100).toFixed(2);
-        return {
-          merchantId: mid, merchantName: merch?.storeName || merch?.name || "",
-          items: mItems, subtotal: mSub, shippingCost: mShip,
-          platformFee: mFee, merchantAmount: +(mTotal - mFee).toFixed(2),
-          status: "submitted",
-          shippingGuide: null, review: null,
-          payoutStatus: null, payoutScheduledAt: null, payoutCompletedAt: null,
-          disputeReason: null, disputeDesc: null, disputeAt: null, disputeResolution: null,
-        };
-      });
-      const shippingTotal = vendors.reduce((s, v) => s + v.shippingCost, 0);
-      const grandTotal    = vendors.reduce((s, v) => s + v.subtotal + v.shippingCost, 0);
-      const orderId = uid();
-      const orderData = {
-        id: orderId, buyerId: user.id, buyerName: user.name || user.email,
-        paymentMethod: method, paymentRef: ref, paymentProofImg: proofImg,
-        status: "submitted", deliveryType, address,
-        grandTotal: +grandTotal.toFixed(2), shippingTotal: +shippingTotal.toFixed(2),
-        vendors, deadline, createdAt: now, updatedAt: now,
-        merchantId: vendors[0]?.merchantId || null,
-      };
-      return actions.placeOrder(orderData).then(r => {
-        if(!r?.error) nav("order-detail", { orderId });
-        return r;
-      });
-    },
+    // Orders
+    upO:            async () => {},
+    placeOrder,
     updateStatus:   actions.updateOrderStatus,
     submitReview:   (orderId, rating, comment, vendorMerchantId) =>
-      actions.submitReview({ orderId, merchantId: vendorMerchantId, rating, comment }),
-    // Cart actions
+      actions.submitReview({ orderId, merchantId:vendorMerchantId, rating, comment }),
+    // Cart
     addToCart:      actions.addToCart,
     removeFromCart: actions.removeFromCart,
     setCartQty:     actions.setCartQty,
     // Favorites
     toggleFav:      async (productId) => {
-      if(!user) { nav("login"); return; }
-      return actions.toggleFav(productId);
+      if(!user) { nav("login"); return }
+      return actions.toggleFav(productId)
     },
     // Q&A
-    askQ:           (productId, question) => actions.askQuestion(productId, question, censorContact),
-    answerQ:        (productId, qId, answer) => actions.answerQuestion(productId, qId, answer, censorContact),
+    askQ:           (productId, q) => actions.askQuestion(productId, q, censorContact),
+    answerQ:        (productId, qId, a) => actions.answerQuestion(productId, qId, a, censorContact),
     // Social
-    toggleFollow:   async (merchantId) => {
-      if(!user) { nav("login"); return; }
-      return actions.toggleFollow(merchantId);
+    toggleFollow:   async (mid) => {
+      if(!user) { nav("login"); return }
+      return actions.toggleFollow(mid)
     },
     // Notifications
     markAllRead:    actions.markAllNotifsRead,
     markNotifDone:  actions.markNotifDone,
-    upN:            async () => {}, // legacy compat
+    upN:            async () => {},
     note:           actions.sendNotif,
     // Payouts
     requestPayout:  actions.requestPayout,
     completePayout: actions.completePayout,
-    setPayReqs:     () => {},  // handled by store
+    setPayReqs:     () => {},
     // Config
     setAppCfg:      actions.updateAppCfg,
-  };
+  }
 
   if(!ready) return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,fontFamily:Fb,gap:14}}>
@@ -480,16 +611,16 @@ export default function App() {
       <div style={{fontSize:52}}>🛍️</div>
       <div style={{color:C.muted,fontSize:14,display:"flex",alignItems:"center",gap:8}}><Spin dark />Cargando VendeYApp…</div>
     </div>
-  );
+  )
 
   if(user?.disabled) return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,fontFamily:Fb,gap:14,textAlign:"center",padding:24}}>
       <div style={{fontSize:52}}>🚫</div>
       <div style={{fontFamily:Fh,fontSize:20,fontWeight:800,color:C.red}}>Cuenta suspendida</div>
-      <div style={{color:C.muted,fontSize:14,maxWidth:340}}>Tu cuenta ha sido suspendida. Contacta al equipo de VendeYApp para más información.</div>
+      <div style={{color:C.muted,fontSize:14,maxWidth:340}}>Tu cuenta ha sido suspendida. Contacta al equipo de VendeYApp.</div>
       <button onClick={actions.logout} style={{...btn(C.navy),marginTop:8}}>Cerrar sesión</button>
     </div>
-  );
+  )
 
   return (
     <div style={{fontFamily:Fb,background:C.bg,minHeight:"100vh",color:C.text}}>
@@ -501,16 +632,10 @@ export default function App() {
         *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
         input:focus,textarea:focus,select:focus{outline:none!important;border-color:${C.red}!important;box-shadow:0 0 0 3px ${C.red}1A!important}
         .lift:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.12)!important;transition:all .2s}
-        .hop:hover{opacity:.82}
-        .hop:active{opacity:.65}
+        .hop:hover{opacity:.82} .hop:active{opacity:.65}
         ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px}
         .si::placeholder{color:rgba(255,255,255,.5)}
-        @media(max-width:640px){
-          .hide-sm{display:none!important}
-          .full-sm{width:100%!important}
-          h1{font-size:18px!important}
-          h2{font-size:16px!important}
-        }
+        @media(max-width:640px){.hide-sm{display:none!important}.full-sm{width:100%!important}h1{font-size:18px!important}h2{font-size:16px!important}}
         .vy-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
         @media(max-width:480px){.vy-grid{grid-template-columns:repeat(2,1fr);gap:8px}}
         @media(max-width:380px){.vy-grid{grid-template-columns:repeat(2,1fr);gap:6px}}
@@ -528,30 +653,29 @@ export default function App() {
         @media(max-width:640px){input,select,textarea{font-size:14px!important}}
         .cats-scroll::-webkit-scrollbar{display:none}
         .page-wrap{padding:16px 14px}
-        @media(min-width:900px){
-          .page-wrap{max-width:960px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 2px 20px rgba(0,0,0,.06);padding:28px 32px;margin-top:20px;margin-bottom:20px}
-        }
+        @media(min-width:900px){.page-wrap{max-width:960px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 2px 20px rgba(0,0,0,.06);padding:28px 32px;margin-top:20px;margin-bottom:20px}}
       `}</style>
       <Header {...ctx} />
       <main style={{paddingBottom:80,background:C.bg,minHeight:"calc(100vh - 64px)"}}>
-        {page==="landing"           && <LandingPage     {...ctx} />}
-        {page==="browse"            && <BrowsePage      {...ctx} />}
-        {page==="product"           && <ProductPage     {...ctx} />}
-        {page==="merchant-profile"  && <MerchantProfile {...ctx} />}
-        {page==="cart"              && <CartPage        {...ctx} />}
-        {page==="checkout"          && <CheckoutPage    {...ctx} />}
+        {page==="landing"            && <LandingPage      {...ctx} />}
+        {page==="browse"             && <BrowsePage       {...ctx} />}
+        {page==="product"            && <ProductPage      {...ctx} />}
+        {page==="merchant-profile"   && <MerchantProfile  {...ctx} />}
+        {page==="cart"               && <CartPage         {...ctx} />}
+        {page==="checkout"           && <CheckoutPage     {...ctx} />}
         {(page==="login"||page==="register") && <AuthPage {...ctx} initMode={page} />}
-        {page==="my-orders"         && <MyOrdersPage    {...ctx} />}
-        {page==="order-detail"      && <OrderDetailPage {...ctx} />}
-        {page==="notifications"     && <NotificationsPage {...ctx} />}
-        {page==="merchant-dash"     && <MerchantDash    {...ctx} />}
-        {page==="merchant-products" && <MerchantProducts {...ctx} />}
-        {page==="merchant-add"      && <MerchantAddEdit {...ctx} />}
-        {page==="merchant-orders"   && <MerchantOrders  {...ctx} />}
-        {page==="merchant-analytics"&& <MerchantAnalytics {...ctx} />}
-        {page==="merchant-qa"       && <MerchantQA      {...ctx} />}
-        {page==="payouts"           && <PayoutsPage     {...ctx} />}
-        {page==="bank-settings"     && <BankSettingsPage {...ctx} />}
+        {page==="favorites"          && <FavoritesPage    {...ctx} />}
+        {page==="my-orders"          && <MyOrdersPage     {...ctx} />}
+        {page==="order-detail"       && <OrderDetailPage  {...ctx} />}
+        {page==="notifications"      && <NotificationsPage {...ctx} />}
+        {page==="merchant-dash"      && <MerchantDash     {...ctx} />}
+        {page==="merchant-products"  && <MerchantProducts {...ctx} />}
+        {page==="merchant-add"       && <MerchantAddEdit  {...ctx} />}
+        {page==="merchant-orders"    && <MerchantOrders   {...ctx} />}
+        {page==="merchant-analytics" && <MerchantAnalytics {...ctx} />}
+        {page==="merchant-qa"        && <MerchantQA       {...ctx} />}
+        {page==="payouts"            && <PayoutsPage      {...ctx} />}
+        {page==="bank-settings"      && <BankSettingsPage {...ctx} />}
         {user?.role==="admin" && page==="admin" && <AdminPanel {...ctx} />}
       </main>
       {toast && (
@@ -560,16 +684,36 @@ export default function App() {
         </div>
       )}
     </div>
-  );
+  )
 }
 
-/* ═══════════════════════════════════════════════
-   HEADER
-═══════════════════════════════════════════════ */
+function useDragScroll() {
+  const elRef = useRef(null);
+  const isDown = useRef(false);
+  const startX = useRef(0);
+  const scrollLeft = useRef(0);
+  const onMouseDown = e => {
+    isDown.current = true;
+    startX.current = e.pageX - elRef.current.offsetLeft;
+    scrollLeft.current = elRef.current.scrollLeft;
+    elRef.current.style.cursor = "grabbing";
+  };
+  const onMouseLeave = () => { isDown.current = false; if(elRef.current) elRef.current.style.cursor = "grab"; };
+  const onMouseUp    = () => { isDown.current = false; if(elRef.current) elRef.current.style.cursor = "grab"; };
+  const onMouseMove  = e => {
+    if(!isDown.current) return;
+    e.preventDefault();
+    const x = e.pageX - elRef.current.offsetLeft;
+    elRef.current.scrollLeft = scrollLeft.current - (x - startX.current) * 1.5;
+  };
+  return { elRef, onMouseDown, onMouseLeave, onMouseUp, onMouseMove };
+}
+
 function Header({ user,cartCount,unread,nav,logout,markAllRead,products }) {
   const [menu, setMenu] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
   const ref = useRef(null);
+  const drag = useDragScroll();
   useEffect(() => {
     const h = e => { if(ref.current && !ref.current.contains(e.target)) setMenu(false); };
     document.addEventListener("mousedown",h);
@@ -628,6 +772,7 @@ function Header({ user,cartCount,unread,nav,logout,markAllRead,products }) {
                     <div style={{fontSize:11,color:C.muted}}>{user.email}</div>
                   </div>
                   <MI icon="📦" label="Mis Compras"          onClick={() => nav("my-orders")} />
+                  <MI icon="❤️" label="Mis Favoritos"        onClick={() => nav("favorites")} />
                   {user.role==="merchant" && (
                     <>
                       <MI icon="📊" label="Mi Tienda"           onClick={() => nav("merchant-dash")} />
@@ -650,7 +795,8 @@ function Header({ user,cartCount,unread,nav,logout,markAllRead,products }) {
 
       {/* Category bar */}
       <div style={{background:C.navyD,borderTop:"1px solid rgba(255,255,255,.07)",overflowX:"auto",scrollbarWidth:"none"}}>
-        <div style={{display:"flex",gap:0,overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none"}} className="cats-scroll">
+        <div ref={drag.elRef} style={{display:"flex",gap:0,overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",msOverflowStyle:"none",cursor:"grab",userSelect:"none"}} className="cats-scroll"
+          onMouseDown={drag.onMouseDown} onMouseLeave={drag.onMouseLeave} onMouseUp={drag.onMouseUp} onMouseMove={drag.onMouseMove}>
           {CATS.filter(c => c!=="Todo").map(c => (
             <button key={c} className="hop" onClick={() => nav("browse",{cat:c})}
               style={{...btn("transparent","rgba(255,255,255,.65)"),padding:"6px 13px",fontSize:11,borderRadius:0,whiteSpace:"nowrap",fontWeight:500,flexShrink:0}}>{c}</button>
@@ -779,7 +925,63 @@ function SmartSearch({ products, nav }) {
 /* ═══════════════════════════════════════════════
    PRODUCT CARD
 ═══════════════════════════════════════════════ */
-function PCard({ product, nav, addToCart, rate, rateLabel }) {
+/* ═══════════════════════════════════════════════
+   SEO + SCHEMA.ORG — useSchema hook
+   Injects JSON-LD structured data per page.
+   Covers: WebSite, Organization, Product,
+   LocalBusiness, BreadcrumbList, SearchAction.
+   Target: Google Rich Results, AI overviews (AEO),
+   LLM knowledge graphs, geo-local pack.
+═══════════════════════════════════════════════ */
+const APP_URL  = "https://vendeya.app";
+const APP_NAME = "VendeYApp";
+const APP_DESC = "Marketplace venezolano de compra y venta online. Productos nuevos y usados con pago seguro en Bolívares, PagoMóvil y Zelle.";
+const APP_LOGO = `${APP_URL}/logo.png`;
+const APP_GEO  = { country:"VE", region:"Caracas, Venezuela", lat:10.4806, lng:-66.9036 };
+
+function useSchema(schemas) {
+  React.useEffect(() => {
+    const id = "vy-jsonld";
+    let el = document.getElementById(id);
+    if(!el) { el = document.createElement("script"); el.id = id; el.type = "application/ld+json"; document.head.appendChild(el); }
+    el.textContent = JSON.stringify(schemas.length === 1 ? schemas[0] : { "@context":"https://schema.org", "@graph": schemas });
+    return () => { /* keep on unmount — updated on next page */ };
+  }, [JSON.stringify(schemas)]);
+}
+
+function useDocTitle(title) {
+  React.useEffect(() => {
+    document.title = title ? `${title} | ${APP_NAME}` : `${APP_NAME} — Marketplace Venezuela`;
+  }, [title]);
+}
+
+function useMeta(desc) {
+  React.useEffect(() => {
+    let el = document.querySelector('meta[name="description"]');
+    if(!el) { el = document.createElement("meta"); el.name = "description"; document.head.appendChild(el); }
+    el.content = desc || APP_DESC;
+    let ogEl = document.querySelector('meta[property="og:description"]');
+    if(!ogEl) { ogEl = document.createElement("meta"); ogEl.setAttribute("property","og:description"); document.head.appendChild(ogEl); }
+    ogEl.content = desc || APP_DESC;
+  }, [desc]);
+}
+
+
+/* Heart icon — saved/unsaved state */
+function HeartIcon({ saved, size=18 }) {
+  return saved ? (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="#E53E3E" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+    </svg>
+  ) : (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+    </svg>
+  );
+}
+
+
+function PCard({ product, nav, addToCart, rate, rateLabel, favs=[], toggleFav }) {
   const ep    = product.salePrice && product.salePrice < product.price;
   const price = ep ? product.salePrice : product.price;
   const disc  = ep ? Math.round((1-product.salePrice/product.price)*100) : 0;
@@ -790,16 +992,15 @@ function PCard({ product, nav, addToCart, rate, rateLabel }) {
         <Img src={product.image} alt={product.name} />
         {/* Pills over image */}
         <div style={{position:"absolute",top:7,left:7,display:"flex",gap:4,flexWrap:"wrap",maxWidth:"calc(100% - 14px)"}}>
-          <Pill label={product.condition==="new"?"✨ Nuevo":"Usado"} c={product.condition==="new"?C.green:C.amber} solid />
+          <Pill label={product.condition==="new"?"Nuevo":"Usado"} c={product.condition==="new"?C.navy:C.slate} solid />
           {disc > 0 && <Pill label={`-${disc}%`} c={C.red} solid />}
         </div>
+        {/* Fav heart */}
         {product.stock > 0 && product.stock <= 2 && !product.freeShipping && (
           <div style={{position:"absolute",bottom:7,left:7}}><Pill label={`¡Último! ${product.stock} disp.`} c={C.amber} solid /></div>
         )}
         {product.freeShipping && product.stock > 0 && (
-          <div style={{position:"absolute",bottom:7,left:7}}>
-            <Pill label={product.stock<=2?`🔥 Último · Envío GRATIS`:"🚚 Envío GRATIS"} c={product.stock<=2?C.amber:C.green} solid />
-          </div>
+          <div style={{position:"absolute",bottom:7,right:7}}><Pill label="🚚 GRATIS" c={C.teal} solid /></div>
         )}
         {noStock && (
           <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.45)",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -816,7 +1017,7 @@ function PCard({ product, nav, addToCart, rate, rateLabel }) {
         </div>
         <div style={{fontSize:10,color:C.muted,marginBottom:9}}>{fBs(price,rate)} · {rateLabel}</div>
         {product.freeShipping && !noStock && (
-          <div style={{fontSize:10,color:C.green,fontWeight:700,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
+          <div style={{fontSize:10,color:C.teal,fontWeight:700,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
             <span>🚚</span><span>Envío GRATIS</span>
           </div>
         )}
@@ -842,7 +1043,7 @@ function PGrid({ items, nav, addToCart, rate, rateLabel }) {
   );
 }
 
-function Section({ title, items, nav, addToCart, rate, rateLabel, onMore }) {
+function Section({ title, items, nav, addToCart, rate, rateLabel, onMore, favs=[], toggleFav }) {
   if(!items.length) return null;
   return (
     <div style={{marginBottom:28}}>
@@ -850,7 +1051,7 @@ function Section({ title, items, nav, addToCart, rate, rateLabel, onMore }) {
         <h2 style={{fontFamily:Fh,margin:0,fontSize:17,fontWeight:800}}>{title}</h2>
         {onMore && <button className="hop" onClick={onMore} style={{...btn(C.light,C.muted),padding:"5px 12px",fontSize:12}}>Ver todos →</button>}
       </div>
-      <PGrid items={items} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel} />
+      <PGrid items={items} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel} favs={favs} toggleFav={toggleFav} />
     </div>
   );
 }
@@ -858,7 +1059,20 @@ function Section({ title, items, nav, addToCart, rate, rateLabel, onMore }) {
 /* ═══════════════════════════════════════════════
    LANDING
 ═══════════════════════════════════════════════ */
-function LandingPage({ products, nav, addToCart, rate, rateLabel, users }) {
+function LandingPage({ products, nav, addToCart, rate, rateLabel, users, favs=[], toggleFav }) {
+  useDocTitle(null);
+  useMeta(APP_DESC);
+  useSchema([{
+    "@context":"https://schema.org",
+    "@type":"ItemList",
+    "name":"Productos destacados en VendeYApp",
+    "description":"Los mejores productos del marketplace venezolano",
+    "itemListElement": products.filter(p=>p.active&&p.stock>0&&p.salePrice).slice(0,12).map((p,i)=>({
+      "@type":"ListItem","position":i+1,
+      "item":{ "@type":"Product","name":p.name,"image":p.image,"description":p.description||p.name,
+        "offers":{"@type":"Offer","price":p.salePrice||p.price,"priceCurrency":"USD","availability":"https://schema.org/InStock"}}
+    }))
+  }]);
   const f      = products.filter(p => p.active && p.stock > 0);
   const sorted = [...f].sort((a,b) => (a.salePrice||a.price)-(b.salePrice||b.price));
   const CATS_ICONS = [["Tecnología","💻"],["Moda","👟"],["Hogar","🏠"],["Deportes","🏋️"],["Alimentos","☕"],["Libros","📚"]];
@@ -922,7 +1136,8 @@ function LandingPage({ products, nav, addToCart, rate, rateLabel, users }) {
           <Section title="🔥 Ofertas del día"
             items={f.filter(p=>p.salePrice).sort((a,b)=>(1-a.salePrice/a.price)-(1-b.salePrice/b.price)).slice(0,8)}
             nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}
-            onMore={()=>nav("browse",{cond:"sale"})} />
+            onMore={()=>nav("browse",{cond:"sale"})} 
+            favs={favs} toggleFav={toggleFav} />
         )}
 
         {/* ── TIENDAS DESTACADAS ── */}
@@ -956,20 +1171,23 @@ function LandingPage({ products, nav, addToCart, rate, rateLabel, users }) {
         <Section title="💻 Tecnología"
           items={f.filter(p=>p.category==="Tecnología").slice(0,8)}
           nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}
-          onMore={()=>nav("browse",{cat:"Tecnología"})} />
+          onMore={()=>nav("browse",{cat:"Tecnología"})} 
+            favs={favs} toggleFav={toggleFav} />
 
         {/* ── NUEVOS PRODUCTOS ── */}
         <Section title="✨ Recién llegados"
           items={[...f].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,8)}
           nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}
-          onMore={()=>nav("browse",{sort:"new"})} />
+          onMore={()=>nav("browse",{sort:"new"})} 
+            favs={favs} toggleFav={toggleFav} />
 
         {/* ── MODA & ESTILO ── */}
         {f.filter(p=>p.category==="Moda").length > 0 && (
           <Section title="👟 Moda y estilo"
             items={f.filter(p=>p.category==="Moda").slice(0,8)}
             nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}
-            onMore={()=>nav("browse",{cat:"Moda"})} />
+            onMore={()=>nav("browse",{cat:"Moda"})} 
+            favs={favs} toggleFav={toggleFav} />
         )}
 
         {/* ── ENVÍO GRATIS BANNER ── */}
@@ -977,7 +1195,7 @@ function LandingPage({ products, nav, addToCart, rate, rateLabel, users }) {
           <div style={{background:`linear-gradient(120deg,${C.green}15,${C.green}05)`,border:`1.5px solid ${C.green}33`,borderRadius:16,padding:"20px 20px",marginBottom:32,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
             <div>
               <div style={{fontFamily:Fh,fontWeight:800,fontSize:16,color:"#064E3B",marginBottom:4}}>🚚 Con envío GRATIS</div>
-              <div style={{fontSize:13,color:"#065F46"}}>{f.filter(p=>p.freeShipping).length} productos con envío incluido</div>
+              <div style={{fontSize:13,color:C.teal}}>{f.filter(p=>p.freeShipping).length} productos con envío incluido</div>
             </div>
             <button className="hop" onClick={()=>nav("browse")} style={{...btn(C.green,"#fff"),padding:"10px 20px",fontSize:13,fontWeight:700}}>Ver todos →</button>
           </div>
@@ -987,14 +1205,16 @@ function LandingPage({ products, nav, addToCart, rate, rateLabel, users }) {
         <Section title="💰 Más accesibles"
           items={sorted.slice(0,8)}
           nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}
-          onMore={()=>nav("browse",{sort:"default"})} />
+          onMore={()=>nav("browse",{sort:"default"})} 
+            favs={favs} toggleFav={toggleFav} />
 
         {/* ── DEPORTES & HOGAR ── */}
         {f.filter(p=>["Deportes","Hogar"].includes(p.category)).length > 0 && (
           <Section title="🏠 Hogar y Deporte"
             items={f.filter(p=>["Deportes","Hogar"].includes(p.category)).slice(0,8)}
             nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}
-            onMore={()=>nav("browse")} />
+            onMore={()=>nav("browse")} 
+            favs={favs} toggleFav={toggleFav} />
         )}
 
       </div>
@@ -1027,7 +1247,7 @@ function LandingPage({ products, nav, addToCart, rate, rateLabel, users }) {
 /* ═══════════════════════════════════════════════
    BROWSE
 ═══════════════════════════════════════════════ */
-function BrowsePage({ products, nav, addToCart, rate, rateLabel, params:ip={} }) {
+function BrowsePage({ products, nav, addToCart, rate, rateLabel, params:ip={}, favs=[], toggleFav }) {
   const [search, setSearch] = useState(ip.search||"");
   const [cat,    setCat]    = useState(ip.cat||"Todo");
   const [cond,   setCond]   = useState(ip.cond||"all");
@@ -1061,8 +1281,20 @@ function BrowsePage({ products, nav, addToCart, rate, rateLabel, params:ip={} })
   const hasAnyFilter = search || cat!=="Todo" || cond!=="all" || loc!=="all" || minP || maxP;
   const pageTitle = search ? `"${search}"` : cat!=="Todo" ? cat : "Todos los productos";
 
+  useDocTitle(cat!=="Todo" ? cat : search ? `Buscar: ${search}` : "Explorar productos");
+  useMeta(`Compra ${cat!=="Todo"?cat:"productos"} en Venezuela. ${search?`Resultados para "${search}". `:""}Precios en dólares, envíos y retiro en tienda.`);
+  useSchema([{
+    "@context":"https://schema.org",
+    "@type":"BreadcrumbList",
+    "itemListElement":[
+      {"@type":"ListItem","position":1,"name":"Inicio","item":APP_URL},
+      {"@type":"ListItem","position":2,"name":"Explorar","item":`${APP_URL}/browse`},
+      ...(cat!=="Todo"?[{"@type":"ListItem","position":3,"name":cat,"item":`${APP_URL}/browse?cat=${encodeURIComponent(cat)}`}]:[])
+    ]
+  }]);
+  /* eslint-disable react-hooks/exhaustive-deps */
   return (
-    <div className="page-wrap" style={{maxWidth:1280}}>
+    <div className="page-wrap">
 
       {/* ── HEADER COMPACTO ── */}
       <div style={{marginBottom:14}}>
@@ -1127,12 +1359,12 @@ function BrowsePage({ products, nav, addToCart, rate, rateLabel, params:ip={} })
 
             <div>
               <div style={{fontSize:10,fontWeight:800,color:C.muted,letterSpacing:.5,textTransform:"uppercase",marginBottom:6}}>Precio USD</div>
-              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+              <div style={{display:"flex",gap:6,alignItems:"center",width:"100%",boxSizing:"border-box"}}>
                 <input value={minP} onChange={e=>setMinP(e.target.value)} placeholder="Mín"
-                  type="number" style={{flex:1,fontSize:12,padding:"6px 8px",borderRadius:8,border:`1px solid ${C.border}`,outline:"none"}} />
-                <span style={{color:C.muted,fontSize:11}}>—</span>
+                  type="number" style={{width:0,flex:1,fontSize:12,padding:"6px 8px",borderRadius:8,border:`1px solid ${C.border}`,outline:"none",boxSizing:"border-box",minWidth:0}} />
+                <span style={{color:C.muted,fontSize:11,flexShrink:0}}>—</span>
                 <input value={maxP} onChange={e=>setMaxP(e.target.value)} placeholder="Máx"
-                  type="number" style={{flex:1,fontSize:12,padding:"6px 8px",borderRadius:8,border:`1px solid ${C.border}`,outline:"none"}} />
+                  type="number" style={{width:0,flex:1,fontSize:12,padding:"6px 8px",borderRadius:8,border:`1px solid ${C.border}`,outline:"none",boxSizing:"border-box",minWidth:0}} />
               </div>
             </div>
           </div>
@@ -1167,7 +1399,7 @@ function BrowsePage({ products, nav, addToCart, rate, rateLabel, params:ip={} })
             )}
           </div>
         )
-        : <PGrid items={f} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel} />
+        : <PGrid items={f} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}  favs={favs} toggleFav={toggleFav}/>
       }
     </div>
   );
@@ -1176,7 +1408,7 @@ function BrowsePage({ products, nav, addToCart, rate, rateLabel, params:ip={} })
 /* ═══════════════════════════════════════════════
    PRODUCT PAGE
 ═══════════════════════════════════════════════ */
-function ProductPage({ products, orders, users, params, nav, addToCart, user, rate, rateLabel, askQ, answerQ, showT, reviews=[], favs=[], toggleFav }) {
+function ProductPage({ products, orders, users, params, nav, addToCart, user, rate, rateLabel, askQ, answerQ, showT, favs=[], toggleFav, reviews=[] }) {
   const product = products.find(p => p.id===params.productId);
   const [qty,       setQtyL]    = useState(1);
   const [question,  setQuestion]= useState("");
@@ -1197,9 +1429,54 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
   const isMerchant = user?.id===product.merchantId;
   const mu         = users?.find(u => u.id===product.merchantId);
 
+  /* ── SEO & Schema ── */
+  useDocTitle(product.name);
+  useMeta(`${product.name} — ${product.condition==="new"?"Nuevo":"Usado"} · ${product.category} en Venezuela. Precio: $${(product.salePrice||product.price).toFixed(2)}${product.freeShipping?" · Envío GRATIS":""}.`);
+  useSchema([
+    {
+      "@context":"https://schema.org",
+      "@type":"Product",
+      "name":product.name,
+      "description":product.description||product.name,
+      "image":product.image,
+      "brand":{"@type":"Brand","name":mu?.storeName||mu?.name||APP_NAME},
+      "category":product.category,
+      "condition":`https://schema.org/${product.condition==="new"?"NewCondition":"UsedCondition"}`,
+      "offers":{
+        "@type":"Offer",
+        "price":(product.salePrice||product.price).toFixed(2),
+        "priceCurrency":"USD",
+        "availability":product.stock>0?"https://schema.org/InStock":"https://schema.org/OutOfStock",
+        "seller":{"@type":"Organization","name":mu?.storeName||mu?.name||APP_NAME},
+        "shippingDetails":product.freeShipping?{
+          "@type":"OfferShippingDetails",
+          "shippingRate":{"@type":"MonetaryAmount","value":"0","currency":"USD"},
+          "shippingDestination":{"@type":"DefinedRegion","addressCountry":"VE"}
+        }:undefined
+      },
+      "aggregateRating": (() => {
+        const revs = (orders||[]).filter(o=>o.vendors?o.vendors.some(v=>v.merchantId===product.merchantId&&v.review):o.review&&o.merchantId===product.merchantId);
+        if(!revs.length) return undefined;
+        const ratings = revs.map(o=>o.vendors?o.vendors.find(v=>v.merchantId===product.merchantId)?.review?.rating:o.review?.rating).filter(Boolean);
+        if(!ratings.length) return undefined;
+        return {"@type":"AggregateRating","ratingValue":(ratings.reduce((s,r)=>s+r,0)/ratings.length).toFixed(1),"reviewCount":ratings.length,"bestRating":"5","worstRating":"1"};
+      })()
+    },
+    {
+      "@context":"https://schema.org",
+      "@type":"BreadcrumbList",
+      "itemListElement":[
+        {"@type":"ListItem","position":1,"name":"Inicio","item":APP_URL},
+        {"@type":"ListItem","position":2,"name":"Explorar","item":`${APP_URL}/browse`},
+        {"@type":"ListItem","position":3,"name":product.category,"item":`${APP_URL}/browse?cat=${encodeURIComponent(product.category)}`},
+        {"@type":"ListItem","position":4,"name":product.name,"item":`${APP_URL}/product/${product.id}`}
+      ]
+    }
+  ].filter(s=>s));
+
   /* Product reviews: reviews for this specific product */
-    const productReviews = reviews.filter(r => r.merchantId===product.merchantId && r.productId===product.id);
-  const storeReviews   = reviews.filter(r => r.merchantId===product.merchantId);
+  const productReviews = orders.filter(o => o.review && o.items.some(i => i.productId===product.id)).map(o => ({...o.review, buyerName:o.buyerName}));
+  const storeReviews   = orders.filter(o => o.merchantId===product.merchantId && o.review).map(o => ({...o.review, buyerName:o.buyerName}));
   const avgR = productReviews.length ? productReviews.reduce((s,r)=>s+r.rating,0)/productReviews.length : 0;
 
   /* Same merchant, other products */
@@ -1222,7 +1499,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
   const noStock = product.stock===0 || !product.active;
 
   return (
-    <div className="page-wrap" style={{maxWidth:1100}}>
+    <div className="page-wrap">
       {/* Breadcrumb */}
       <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:14,fontSize:12,color:C.muted,flexWrap:"wrap"}}>
         <span onClick={() => nav("landing")} style={{cursor:"pointer",color:C.red}}>Inicio</span>
@@ -1243,7 +1520,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
                 <div style={{borderRadius:12,overflow:"hidden",aspectRatio:"1/1",width:"100%",background:C.light,position:"relative"}}>
                   <Img src={imgs[activeImg]||imgs[0]||""} alt={product.name} />
                   <div style={{position:"absolute",top:10,left:10,display:"flex",gap:5,flexWrap:"wrap"}}>
-                    <Pill label={product.condition==="new"?"✨ Nuevo":"Usado"} c={product.condition==="new"?C.green:C.amber} solid />
+                    <Pill label={product.condition==="new"?"Nuevo":"Usado"} c={product.condition==="new"?C.navy:C.slate} solid />
                     {disc > 0 && <Pill label={`-${disc}%`} c={C.red} solid />}
                     {noStock && <Pill label="Sin Stock" c="#fff" bg="rgba(0,0,0,.75)" />}
                   </div>
@@ -1279,7 +1556,21 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
         {/* Details */}
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           <div style={{fontSize:11,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:.5}}>{product.category}</div>
-          <h1 style={{fontFamily:Fh,fontSize:"clamp(18px,3vw,22px)",margin:0,lineHeight:1.2,fontWeight:800}}>{product.name}</h1>
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10}}>
+            <h1 style={{fontFamily:Fh,fontSize:"clamp(18px,3vw,22px)",margin:0,lineHeight:1.2,fontWeight:800,flex:1}}>{product.name}</h1>
+            <button onClick={()=>toggleFav&&toggleFav(product.id)}
+              style={{background:favs.includes(product.id)?"#FFF5F5":"transparent",
+                border:`1px solid ${favs.includes(product.id)?"#FCA5A5":C.border}`,
+                borderRadius:8,cursor:"pointer",padding:"7px 12px",display:"flex",alignItems:"center",gap:6,
+                flexShrink:0,transition:"all .15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.background="#FFF5F5";e.currentTarget.style.borderColor="#FCA5A5";}}
+              onMouseLeave={e=>{e.currentTarget.style.background=favs.includes(product.id)?"#FFF5F5":"transparent";e.currentTarget.style.borderColor=favs.includes(product.id)?"#FCA5A5":C.border;}}>
+              <HeartIcon saved={favs.includes(product.id)} size={16} />
+              <span style={{fontSize:12,fontWeight:600,color:favs.includes(product.id)?"#E53E3E":"#6B7280"}}>
+                {favs.includes(product.id)?"Guardado":"Guardar"}
+              </span>
+            </button>
+          </div>
 
           <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <span onClick={() => nav("merchant-profile",{merchantId:product.merchantId})} style={{color:C.navy,fontWeight:700,fontSize:13,cursor:"pointer"}}>🏪 {product.merchantName}</span>
@@ -1292,7 +1583,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
             {ep && (
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                 <span style={{fontSize:14,color:C.muted,textDecoration:"line-through"}}>{fU(product.price)}</span>
-                <Pill label={`Ahorra ${fU(savings)}`} c={C.green} bg={C.greenL} />
+                <Pill label={`Ahorra ${fU(savings)}`} c={C.teal} bg={C.tealL} />
               </div>
             )}
             <div style={{fontFamily:Fh,fontWeight:900,fontSize:"clamp(28px,4vw,36px)",color:C.red,lineHeight:1}}>{fU(finalPrice)}</div>
@@ -1302,7 +1593,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
           {/* Delivery options */}
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {product.allowsDelivery && (
-              <div style={{background:product.freeShipping?C.greenL:C.light,color:product.freeShipping?C.green:C.text,padding:"6px 11px",borderRadius:8,fontSize:12,fontWeight:600,border:`1px solid ${product.freeShipping?C.green+"33":C.border}`,display:"flex",gap:5,alignItems:"center"}}>
+              <div style={{background:product.freeShipping?C.tealL:C.light,color:product.freeShipping?C.teal:C.text,padding:"6px 11px",borderRadius:8,fontSize:12,fontWeight:600,border:`1px solid ${product.freeShipping?C.teal+"33":C.border}`,display:"flex",gap:5,alignItems:"center"}}>
                 🚚 {product.freeShipping ? "Envío GRATIS" : (product.shippingCost||0)>0 ? `Envío: ${fU(product.shippingCost)}` : "Consultar envío"} · {product.deliveryDays||"3-7"} días
               </div>
             )}
@@ -1396,7 +1687,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
             <h3 style={{fontFamily:Fh,margin:0,fontSize:15,fontWeight:800}}>Más de <span onClick={()=>nav("merchant-profile",{merchantId:product.merchantId})} style={{color:C.red,cursor:"pointer"}}>{product.merchantName}</span></h3>
             <button className="hop" onClick={()=>nav("merchant-profile",{merchantId:product.merchantId})} style={{...btn(C.light,C.muted),padding:"5px 11px",fontSize:11}}>Ver tienda →</button>
           </div>
-          <PGrid items={sameVendor} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel} />
+          <PGrid items={sameVendor} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}  favs={favs} toggleFav={toggleFav}/>
         </div>
       )}
 
@@ -1407,7 +1698,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
             <h3 style={{fontFamily:Fh,margin:0,fontSize:15,fontWeight:800}}>También en {product.category} · otros vendedores</h3>
             <button className="hop" onClick={()=>nav("browse",{cat:product.category})} style={{...btn(C.light,C.muted),padding:"5px 11px",fontSize:11}}>Ver más →</button>
           </div>
-          <PGrid items={otherVendors} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel} />
+          <PGrid items={otherVendors} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}  favs={favs} toggleFav={toggleFav}/>
         </div>
       )}
     </div>
@@ -1417,7 +1708,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
 /* ═══════════════════════════════════════════════
    MERCHANT PROFILE
 ═══════════════════════════════════════════════ */
-function MerchantProfile({ users,products,orders,params,nav,user,toggleFollow,addToCart,rate,rateLabel }) {
+function MerchantProfile({ users,products,orders,params,nav,user,toggleFollow,addToCart,rate,rateLabel,favs=[],toggleFav,reviews=[] }) {
   const merchant = users.find(u => u.id===params.merchantId);
   if(!merchant) return <div style={{padding:40,textAlign:"center",color:C.muted}}>Tienda no encontrada</div>;
 
@@ -1429,8 +1720,41 @@ function MerchantProfile({ users,products,orders,params,nav,user,toggleFollow,ad
   const years    = Math.max(1, new Date().getFullYear()-new Date(merchant.joinedAt).getFullYear());
   const fl       = (merchant.followers||[]).length;
 
+  /* ── SEO & Schema ── */
+  useDocTitle(merchant.storeName||merchant.name);
+  useMeta(`${merchant.storeName||merchant.name} — Tienda en VendeYApp${merchant.location?` · ${merchant.location}`:""}. ${mp.length} producto${mp.length!==1?"s":""} disponibles${avgR>0?`. Calificación: ${avgR.toFixed(1)}/5`:""}.`);
+  useSchema([
+    {
+      "@context":"https://schema.org",
+      "@type":"LocalBusiness",
+      "name":merchant.storeName||merchant.name,
+      "description":merchant.storeDesc||`Tienda de ${merchant.storeName||merchant.name} en VendeYApp`,
+      "image":merchant.storeLogo||APP_LOGO,
+      "url":`${APP_URL}/merchant/${merchant.id}`,
+      "address":{"@type":"PostalAddress","addressLocality":merchant.location||"Venezuela","addressCountry":"VE"},
+      "geo":{"@type":"GeoCoordinates","latitude":APP_GEO.lat,"longitude":APP_GEO.lng},
+      "areaServed":{"@type":"Country","name":"Venezuela"},
+      "priceRange":"$$",
+      ...(avgR>0?{"aggregateRating":{"@type":"AggregateRating","ratingValue":avgR.toFixed(1),"reviewCount":reviews.length,"bestRating":"5","worstRating":"1"}}:{}),
+      "hasOfferCatalog":{
+        "@type":"OfferCatalog",
+        "name":`Catálogo de ${merchant.storeName||merchant.name}`,
+        "numberOfItems":mp.length
+      }
+    },
+    {
+      "@context":"https://schema.org",
+      "@type":"BreadcrumbList",
+      "itemListElement":[
+        {"@type":"ListItem","position":1,"name":"Inicio","item":APP_URL},
+        {"@type":"ListItem","position":2,"name":"Tiendas","item":`${APP_URL}/browse`},
+        {"@type":"ListItem","position":3,"name":merchant.storeName||merchant.name,"item":`${APP_URL}/merchant/${merchant.id}`}
+      ]
+    }
+  ]);
+
   return (
-    <div className="page-wrap" style={{maxWidth:1050}}>
+    <div className="page-wrap">
       <div style={{...card,overflow:"hidden",marginBottom:16}}>
         <div style={{background:`linear-gradient(135deg,${C.navyD},${C.navy})`,padding:"22px 20px 18px"}}>
           <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-start"}}>
@@ -1471,7 +1795,7 @@ function MerchantProfile({ users,products,orders,params,nav,user,toggleFollow,ad
       {mp.length > 0 && (
         <div style={{marginBottom:16}}>
           <h3 style={{fontFamily:Fh,margin:"0 0 12px",fontSize:15,fontWeight:800}}>Productos ({mp.length}) · precio más bajo primero</h3>
-          <PGrid items={mp} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel} />
+          <PGrid items={mp} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel}  favs={favs} toggleFav={toggleFav}/>
         </div>
       )}
 
@@ -1517,7 +1841,7 @@ function CartPage({ cart,cartTotal,removeFromCart,setCartQty,nav,user,rate,rateL
     </div>
   );
   return (
-    <div className="page-wrap" style={{maxWidth:660}}>
+    <div className="page-wrap">
       <h1 style={{fontFamily:Fh,margin:"0 0 18px",fontSize:20,fontWeight:800}}>Carrito</h1>
       <div style={{display:"flex",flexDirection:"column",gap:9,marginBottom:18}}>
         {cart.map(item => {
@@ -1644,7 +1968,7 @@ function CheckoutPage({ cart,cartTotal,placeOrder,nav,rate,rateLabel,products,us
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i.product.name}</div>
                         <div style={{fontSize:11,color:C.muted}}>×{i.qty}
-                          {dlvType==="delivery" && i.product.freeShipping && <span style={{color:C.green,fontWeight:700,marginLeft:5}}>· 🚚 Gratis</span>}
+                          {dlvType==="delivery" && i.product.freeShipping && <span style={{color:C.teal,fontWeight:700,marginLeft:5}}>· 🚚 Gratis</span>}
                           {dlvType==="delivery" && !i.product.freeShipping && i.product.shippingCost>0 && <span style={{color:C.muted,marginLeft:5}}>+ {fU(i.product.shippingCost)} envío</span>}
                         </div>
                       </div>
@@ -1662,7 +1986,7 @@ function CheckoutPage({ cart,cartTotal,placeOrder,nav,rate,rateLabel,products,us
               <span>Subtotal productos</span><span>{fU(itemsTotal)}</span>
             </div>
             {dlvType==="delivery" && (
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:shippingTotal===0?C.green:C.text,marginBottom:3}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:shippingTotal===0?C.teal:C.text,marginBottom:3}}>
                 <span>🚚 Envío</span><span style={{fontWeight:600}}>{shippingTotal===0?"GRATIS":fU(shippingTotal)}</span>
               </div>
             )}
@@ -1684,7 +2008,7 @@ function CheckoutPage({ cart,cartTotal,placeOrder,nav,rate,rateLabel,products,us
   const steps = ["Entrega","Método de Pago","Confirmar"];
 
   return (
-    <div className="page-wrap" style={{maxWidth:640}}>
+    <div className="page-wrap">
       <h1 style={{fontFamily:Fh,margin:"0 0 16px",fontSize:19,fontWeight:800}}>Finalizar Compra</h1>
 
       {/* Stepper */}
@@ -1837,6 +2161,8 @@ function CheckoutPage({ cart,cartTotal,placeOrder,nav,rate,rateLabel,products,us
    AUTH
 ═══════════════════════════════════════════════ */
 function AuthPage({ login,register,verifyEmail,nav,initMode="login",params={} }) {
+  useDocTitle(initMode==="login"?"Iniciar sesión":"Crear cuenta");
+  useMeta("Inicia sesión o crea tu cuenta en VendeYApp. Compra y vende en Venezuela de forma segura.");
   const [isLogin, setIsLogin] = useState(initMode==="login");
   const [role,    setRole]    = useState("buyer");
   const [name,    setName]    = useState("");
@@ -1862,7 +2188,9 @@ function AuthPage({ login,register,verifyEmail,nav,initMode="login",params={} })
       if(r?.error==="not_verified") { const c=gC(); setVs({userId:r.userId,code:c,email}); setLoading(false); return; }
       if(r?.error) { setErr(r.error); setLoading(false); return; }
       const ret = params?.returnTo;
-      nav(ret ? ret : r.user.role==="admin"?"admin":r.user.role==="merchant"?"merchant-dash":"landing");
+      const retParams = params?.returnToParams || {};
+      nav(ret ? ret : r.user.role==="admin"?"admin":r.user.role==="merchant"?"merchant-dash":"landing",
+          {...retParams, ...(params?.pendingFav ? {pendingFav:params.pendingFav} : {})});
     } else {
       if(!name||!email||!pw||!location) { setErr("Completa todos los campos."); setLoading(false); return; }
       const r = await register({name,email,password:pw,role,location,...(role==="merchant"?{storeName:storeN||`${name} Store`,storeDesc:storeD,storeLogo,bankData}:{storeName:"",storeDesc:""})});
@@ -1956,7 +2284,7 @@ function AuthPage({ login,register,verifyEmail,nav,initMode="login",params={} })
 
         {err && <div style={{background:C.redL,color:"#991B1B",borderRadius:7,padding:"8px 12px",fontSize:12,marginTop:9}}>⚠️ {err}</div>}
 
-        {isLogin && <div style={{background:C.light,borderRadius:8,padding:"8px 11px",fontSize:11,color:C.muted,marginTop:9}}>💡 Demo: <strong>carlos@demo.com</strong>/1234 · <strong>pedro@demo.com</strong>/1234 · <strong>admin@vendeya.com</strong>/admin2024</div>}
+        
 
         <button className="hop" onClick={handle} disabled={loading}
           style={{...btn(C.red),padding:"12px",width:"100%",marginTop:13,fontSize:14,justifyContent:"center",opacity:loading?0.7:1,fontWeight:700}}>
@@ -1974,10 +2302,34 @@ function AuthPage({ login,register,verifyEmail,nav,initMode="login",params={} })
 /* ═══════════════════════════════════════════════
    MY ORDERS + ORDER DETAIL
 ═══════════════════════════════════════════════ */
+function FavoritesPage({ products, nav, addToCart, rate, rateLabel, favs=[], toggleFav, user }) {
+  const favProducts = products.filter(p => favs.includes(p.id));
+  useDocTitle("Mis Favoritos");
+  useMeta("Tus productos guardados en VendeYApp.");
+  return (
+    <div className="page-wrap">
+      <h1 style={{fontFamily:Fh,margin:"0 0 18px",fontSize:20,fontWeight:800}}>❤️ Mis Favoritos</h1>
+      {!favProducts.length ? (
+        <div style={{textAlign:"center",padding:"60px 20px",color:C.muted}}>
+          <div style={{marginBottom:14,display:"flex",justifyContent:"center"}}><HeartIcon saved={false} size={52} /></div>
+          <div style={{fontSize:16,fontWeight:600,marginBottom:8}}>Aún no tienes favoritos</div>
+          <div style={{fontSize:13,marginBottom:20}}>Guarda productos que te interesen con el corazón</div>
+          <button className="hop" onClick={()=>nav("browse")} style={{...btn(C.red),padding:"11px 24px",fontSize:14}}>Explorar productos</button>
+        </div>
+      ) : (
+        <>
+          <div style={{fontSize:12,color:C.muted,marginBottom:14}}>{favProducts.length} producto{favProducts.length!==1?"s":""} guardado{favProducts.length!==1?"s":""}</div>
+          <PGrid items={favProducts} nav={nav} addToCart={addToCart} rate={rate} rateLabel={rateLabel} favs={favs} toggleFav={toggleFav} />
+        </>
+      )}
+    </div>
+  );
+}
+
 function MyOrdersPage({ user,orders,nav }) {
   const mine = orders.filter(o => o.buyerId===user?.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
   return (
-    <div className="page-wrap" style={{maxWidth:800}}>
+    <div className="page-wrap">
       <h1 style={{fontFamily:Fh,margin:"0 0 18px",fontSize:20,fontWeight:800}}>Mis Compras</h1>
       {!mine.length
         ? <div style={{textAlign:"center",padding:50,color:C.muted}}><div style={{fontSize:48}}>📦</div><div style={{marginTop:10,fontWeight:600}}>Sin pedidos aún</div><button className="hop" onClick={()=>nav("browse")} style={{...btn(C.red),padding:"10px 20px",marginTop:14,justifyContent:"center"}}>Explorar</button></div>
@@ -2025,8 +2377,10 @@ function OCard({ order,nav }) {
       </div>
       <div style={{display:"flex",gap:6,alignItems:"center"}}>
         {(order.vendors ? order.vendors.flatMap(v=>v.items) : order.items||[]).slice(0,4).map(i => <div key={i.productId} style={{width:38,height:38,borderRadius:6,overflow:"hidden",flexShrink:0,background:C.light}}><Img src={i.product?.image} /></div>)}
-        {order.vendors && order.vendors.length > 1 && (
-          <span style={{fontSize:10,color:C.navy,fontWeight:700,background:C.navyL,padding:"2px 6px",borderRadius:8}}>{order.vendors.length} tiendas</span>
+        {order.vendors && (
+          <span style={{fontSize:10,color:C.navy,fontWeight:700,background:C.navyL,padding:"2px 6px",borderRadius:8}}>
+            {order.vendors.length === 1 ? `🏪 ${order.vendors[0].merchantName}` : `${order.vendors.length} tiendas`}
+          </span>
         )}
         {(order.vendors ? order.vendors.some(v=>v.review) : order.review) && <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:4}}><Stars v={(order.vendors?order.vendors.find(v=>v.review)?.review:order.review)?.rating||0} size={11} /><span style={{fontSize:10,color:C.muted}}>Reseñada</span></div>}
         {order.status==="submitted" && order.deadline && !expired && !(order.paymentRef && order.paymentProofImg) && (
@@ -2140,6 +2494,9 @@ function VendorSection({ vendor, order, isMerchant, isBuyer, isAdmin, user, upda
   const [rating,        setRating]       = useState(0);
   const [comment,       setComment]      = useState("");
   const [submRev,       setSubmRev]      = useState(false);
+  const [buyerRating,   setBuyerRating]  = useState(0);
+  const [buyerComment,  setBuyerComment] = useState("");
+  const [submBuyerRev,  setSubmBuyerRev] = useState(false);
   const [confirmDlv,    setConfirmDlv]   = useState(false);
   const [showDispute,   setShowDispute]  = useState(false);
   const [dispReason,    setDispReason]   = useState("");
@@ -2167,7 +2524,7 @@ function VendorSection({ vendor, order, isMerchant, isBuyer, isAdmin, user, upda
   return (
     <div style={{...card,padding:16,marginBottom:12}}>
       {/* Vendor header */}
-      {multi && (
+      {(multi || isBuyer || isAdmin) && (
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${C.border}`}}>
           <div style={{fontWeight:700,fontSize:14,fontFamily:Fh}}>🏪 {vendor.merchantName}</div>
           <span style={{background:st.bg,color:st.c,fontSize:11,fontWeight:700,padding:"3px 9px",borderRadius:20}}>{st.l}</span>
@@ -2281,11 +2638,9 @@ function VendorSection({ vendor, order, isMerchant, isBuyer, isAdmin, user, upda
           </div>
         )}
         {isMerchant && vStatus==="processing" && isPickup && (
-          <div style={{padding:14,borderRadius:9,background:C.greenL,border:`1.5px solid ${C.green}33`}}>
-            <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>🏪 Confirmar Retiro</div>
-            <div style={{fontSize:12,color:C.muted,marginBottom:8}}>Confirma cuando el comprador retire físicamente el pedido.</div>
-            <div style={{background:C.amberL,borderRadius:7,padding:"7px 10px",fontSize:11,color:"#78350F",marginBottom:10}}>⚠️ Esta acción es irreversible. Confirma solo cuando el comprador ya tenga el producto.</div>
-            <button className="hop" onClick={()=>upV("released")} style={{...btn(C.green),padding:"12px",width:"100%",justifyContent:"center",fontWeight:700}}>✅ El comprador retiró — Liberar fondos</button>
+          <div style={{padding:13,borderRadius:9,background:C.navyL,border:`1px solid ${C.navy}22`}}>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:C.navy}}>⏳ Esperando confirmación del comprador</div>
+            <div style={{fontSize:12,color:C.muted,lineHeight:1.5}}>El pedido está listo. Los fondos se liberarán automáticamente cuando el comprador confirme que retiró el producto.</div>
           </div>
         )}
         {isMerchant && vStatus==="processing" && !isPickup && (
@@ -2301,6 +2656,26 @@ function VendorSection({ vendor, order, isMerchant, isBuyer, isAdmin, user, upda
               style={{...btn(shipB64?C.red:C.light,shipB64?"#fff":C.muted),padding:"11px",width:"100%",justifyContent:"center",fontWeight:700}}>
               {shipB64?"🚚 Confirmar Envío":"⚠️ Sube la guía para continuar"}
             </button>
+          </div>
+        )}
+
+        {/* BUYER: confirm pickup */}
+        {isBuyer && vStatus==="processing" && isPickup && (
+          <div style={{padding:14,borderRadius:9,background:C.light,border:`1px solid ${C.border}`}}>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:4}}>🏪 ¿Retiraste el pedido?</div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:10,lineHeight:1.5}}>
+              El pedido está listo en <strong>{merch?.pickupAddress||vendor.merchantName}</strong>. Confirma solo cuando tengas el producto en tus manos — esto libera los fondos al vendedor.
+            </div>
+            {!confirmDlv
+              ? <button className="hop" onClick={()=>setConfirmDlv(true)} style={{...btn(C.green),padding:"11px",width:"100%",justifyContent:"center",fontWeight:700}}>✅ Confirmar que retiré el pedido</button>
+              : <div>
+                  <div style={{background:C.amberL,borderRadius:7,padding:"8px 10px",fontSize:12,marginBottom:9,color:"#78350F"}}>⚠️ Al confirmar, los fondos se liberan al vendedor. ¿Ya tienes el producto?</div>
+                  <div style={{display:"flex",gap:9}}>
+                    <button className="hop" onClick={()=>upV("released")} style={{...btn(C.green),padding:"10px",flex:1,justifyContent:"center",fontWeight:700}}>✅ Sí, ya lo tengo</button>
+                    <button className="hop" onClick={()=>setConfirmDlv(false)} style={{...btn(C.light,C.muted),padding:"10px"}}>Cancelar</button>
+                  </div>
+                </div>
+            }
           </div>
         )}
 
@@ -2366,6 +2741,42 @@ function VendorSection({ vendor, order, isMerchant, isBuyer, isAdmin, user, upda
           </div>
         )}
         {vendor.review && <div style={{background:C.greenL,borderRadius:9,padding:10,fontSize:12,color:"#065F46",display:"flex",alignItems:"center",gap:7}}><Stars v={vendor.review.rating} size={13} /><span>Reseña enviada ✓</span></div>}
+        {isBuyer && vendor.buyerReview && vendor.review && (
+          <div style={{background:C.navyL,borderRadius:9,padding:10,border:`1px solid ${C.navy}22`}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.navy,marginBottom:4}}>📝 El vendedor te calificó:</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <Stars v={vendor.buyerReview.rating} size={13} />
+              {vendor.buyerReview.comment && <span style={{fontSize:11,color:C.muted}}>"{vendor.buyerReview.comment}"</span>}
+            </div>
+          </div>
+        )}
+        {isBuyer && vendor.buyerReview && !vendor.review && (
+          <div style={{background:C.light,borderRadius:9,padding:10,border:`1px solid ${C.border}`,fontSize:12,color:C.muted}}>
+            🔒 El vendedor ya te calificó — califica tú primero para ver su reseña.
+          </div>
+        )}
+
+        {/* MERCHANT: review of buyer */}
+        {isMerchant && vStatus==="released" && !vendor.buyerReview && (
+          <div style={{padding:14,borderRadius:9,background:C.navyL,border:`1px solid ${C.navy}22`}}>
+            <div style={{fontWeight:700,fontSize:13,marginBottom:8,color:C.navy}}>⭐ Califica al comprador</div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <Stars v={buyerRating} size={26} onChange={setBuyerRating} />
+              {buyerRating>0 && <span style={{fontSize:12,color:C.muted}}>{["","Malo","Regular","Bueno","Muy bueno","Excelente"][buyerRating]}</span>}
+            </div>
+            <textarea value={buyerComment} onChange={e=>setBuyerComment(e.target.value)} placeholder="¿Cómo fue la experiencia con este comprador?" style={{...inp,minHeight:55,resize:"vertical",marginBottom:8}} />
+            <button className="hop" onClick={async()=>{if(!buyerRating)return;setSubmBuyerRev(true);await submitReview(order.id,buyerRating,buyerComment,vendor.merchantId,"buyer");setSubmBuyerRev(false);}}
+              disabled={submBuyerRev||!buyerRating} style={{...btn(C.navy),padding:"9px",width:"100%",justifyContent:"center",opacity:!buyerRating?0.45:1,fontWeight:700}}>
+              {submBuyerRev?<><Spin dark/>Enviando…</>:"Publicar Reseña al Comprador ⭐"}
+            </button>
+          </div>
+        )}
+        {isMerchant && vendor.buyerReview && (
+          <div style={{background:C.navyL,borderRadius:9,padding:10,fontSize:12,color:C.navy,display:"flex",alignItems:"center",gap:7}}>
+            <Stars v={vendor.buyerReview.rating} size={13} />
+            <span>Reseña al comprador enviada ✓</span>
+          </div>
+        )}
 
         {/* ADMIN: dispute resolution */}
         {isAdmin && vStatus==="disputed" && !vendor.disputeResolution && (
@@ -2409,7 +2820,7 @@ function OrderDetailPage({ orders,users,params,updateStatus,user,nav,submitRevie
   const grandTotal    = order.grandTotal    ?? allVendors.reduce((s,v)=>s+v.subtotal+(v.shippingCost||0),0);
 
   return (
-    <div className="page-wrap" style={{maxWidth:720}}>
+    <div className="page-wrap">
       <button className="hop" onClick={()=>nav(isMerchant?"merchant-orders":isAdmin?"admin":"my-orders")}
         style={{...btn(C.light,C.muted),padding:"6px 12px",fontSize:12,marginBottom:16}}>← Volver</button>
 
@@ -2555,7 +2966,7 @@ function NotificationsPage({ myNotifs,nav,markNotifDone,upN,user }) {
   const done   = myNotifs.filter(n => n.done);
 
   return (
-    <div className="page-wrap" style={{maxWidth:660}}>
+    <div className="page-wrap">
       <h1 style={{fontFamily:Fh,margin:"0 0 18px",fontSize:20,fontWeight:800}}>🔔 Notificaciones</h1>
       {!myNotifs.length && (
         <div style={{textAlign:"center",padding:50,color:C.muted}}><div style={{fontSize:44}}>🔔</div><div style={{marginTop:10,fontWeight:600}}>Sin notificaciones</div></div>
@@ -2772,6 +3183,9 @@ function MerchantQA({ user, products, nav, answerQ, showT }) {
    MERCHANT DASH + PRODUCTS + ADD/EDIT + ORDERS
 ═══════════════════════════════════════════════ */
 function MerchantDash({ user,users,products,orders,nav,upU,showT,setUser,reviews=[] }) {
+  const [pickupAddr,  setPickupAddr]  = useState("");
+  const [pickupSched, setPickupSched] = useState("");
+  const [pickupSaving,setPickupSaving]= useState(false);
   const mp    = products.filter(p => p.merchantId===user?.id);
   const mo    = orders.filter(o => o.merchantId===user?.id);
   const pending = mo.filter(o => ["submitted","verified"].includes(o.status));
@@ -2779,6 +3193,17 @@ function MerchantDash({ user,users,products,orders,nav,upU,showT,setUser,reviews
   const earned  = mo.filter(o => o.status==="released").reduce((s,o)=>s+o.merchantAmount,0);
   const mu = users?.find(u=>u.id===user?.id)||user;
   const walletBal = mu?.walletBalance||0;
+  // sync pickup state from user data
+  React.useEffect(()=>{ setPickupAddr(mu?.pickupAddress||""); setPickupSched(mu?.pickupSchedule||""); },[mu?.pickupAddress,mu?.pickupSchedule]);
+  const savePickup = async () => {
+    setPickupSaving(true);
+    const updated = users.map(u=>u.id===user.id?{...u,pickupAddress:pickupAddr.trim(),pickupSchedule:pickupSched.trim()}:u);
+    await upU(updated);
+    const nu = updated.find(u=>u.id===user.id);
+    setUser(nu);
+    setPickupSaving(false);
+    showT("Datos de retiro guardados ✓");
+  };
   const myReviews = reviews.filter(r=>r.merchantId===user?.id);
   const avgR    = myReviews.length ? (myReviews.reduce((s,r)=>s+r.rating,0)/myReviews.length).toFixed(1) : "—";
 
@@ -2809,7 +3234,7 @@ function MerchantDash({ user,users,products,orders,nav,upU,showT,setUser,reviews
               ? <img src={user.storeLogo} style={{width:"100%",height:"100%",objectFit:"cover"}} />
               : <span style={{fontFamily:Fh,fontWeight:900,fontSize:22,color:"#fff"}}>{user?.storeName?.[0]||"🏪"}</span>}
             <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.45)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#fff",opacity:0}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>📷</div>
-            <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0];if(!f)return;const b=await compressImg(f,400);if(b){const nu=users.map(u=>u.id===user.id?{...u,storeLogo:b}:u);await upU(nu);const nu2=nu.find(u=>u.id===user.id);setUser(nu2);await sSet("v5_s",nu2);showT("Logo actualizado ✓");}e.target.value="";}} />
+            <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0];if(!f)return;const b=await compressImg(f,400);if(b){const nu=users.map(u=>u.id===user.id?{...u,storeLogo:b}:u);await upU(nu);const nu2=nu.find(u=>u.id===user.id);setUser(nu2);showT("Logo actualizado ✓");}e.target.value="";}} />
           </label>
           <div>
             <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
@@ -2929,6 +3354,29 @@ function MerchantDash({ user,users,products,orders,nav,upU,showT,setUser,reviews
           </div>
         </div>
 
+        {/* Pickup address card */}
+        <div style={{...card,padding:16,marginTop:0}}>
+          <div style={{fontWeight:700,fontSize:14,fontFamily:Fh,marginBottom:4}}>🏪 Retiro en Tienda</div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Esta dirección la verá el comprador cuando su pedido esté listo para retirar.</div>
+          <div style={{display:"flex",flexDirection:"column",gap:9}}>
+            <div>
+              <label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:4}}>Dirección de retiro</label>
+              <textarea value={pickupAddr} onChange={e=>setPickupAddr(e.target.value)}
+                placeholder="Ej: CC Sambil, Nivel Feria, Local 142, Chacao, Caracas."
+                style={{...inp,minHeight:60,resize:"vertical",fontFamily:Fb,fontSize:13,lineHeight:1.5}} />
+            </div>
+            <div>
+              <label style={{fontSize:12,fontWeight:700,display:"block",marginBottom:4}}>Horario de atención</label>
+              <input value={pickupSched} onChange={e=>setPickupSched(e.target.value)}
+                placeholder="Ej: Lunes a Sábado, 10:00am – 7:00pm" style={inp} />
+            </div>
+            <button className="hop" onClick={savePickup} disabled={pickupSaving}
+              style={{...btn(C.navy),padding:"10px",justifyContent:"center",fontSize:13,fontWeight:700,opacity:pickupSaving?0.6:1}}>
+              {pickupSaving?<><Spin/>Guardando…</>:"Guardar datos de retiro ✓"}
+            </button>
+          </div>
+        </div>
+
       </div>
     </div>
     </MerchantShell>
@@ -2961,7 +3409,7 @@ function MerchantProducts({ user,products,upP,nav,showT }) {
               <div key={p.id} style={{...card,overflow:"hidden"}}>
                 <div style={{height:130,overflow:"hidden",position:"relative",background:C.light}}>
                   <Img src={p.image} />
-                  <div style={{position:"absolute",top:6,left:6}}><Pill label={p.condition==="new"?"✨ Nuevo":"Usado"} c={p.condition==="new"?C.green:C.amber} solid /></div>
+                  <div style={{position:"absolute",top:6,left:6}}><Pill label={p.condition==="new"?"Nuevo":"Usado"} c={p.condition==="new"?C.navy:C.slate} solid /></div>
                   <div style={{position:"absolute",top:6,right:6,display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end"}}>
                     <Pill label={p.active&&!p.adminDisabled?"ON":p.adminDisabledPermanent?"🚫 Bloqueado":"PAUSADO"} c={p.active&&!p.adminDisabled?C.green:C.red} />
                   </div>
@@ -3159,9 +3607,9 @@ function MerchantAddEdit({ user,products,upP,nav,showT,params }) {
                   <input value={deliveryDays} onChange={e=>setDays(e.target.value)} placeholder="Días de entrega (ej: 3-5)" style={{...inp,fontSize:12}} />
                   {/* Shipping cost inside delivery */}
                   <div style={{display:"flex",gap:8}}>
-                    <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"8px 11px",borderRadius:8,border:`1.5px solid ${freeShipping?C.green:C.border}`,background:freeShipping?"#fff":"transparent",flex:1}}>
-                      <input type="checkbox" checked={freeShipping} onChange={e=>{setFreeShip(e.target.checked);if(e.target.checked)setShippingCost(0);}} style={{accentColor:C.green}} />
-                      <div style={{fontWeight:700,fontSize:12,color:C.green}}>🚚 Envío GRATIS</div>
+                    <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"8px 11px",borderRadius:8,border:`1.5px solid ${freeShipping?C.teal:C.border}`,background:freeShipping?"#fff":"transparent",flex:1}}>
+                      <input type="checkbox" checked={freeShipping} onChange={e=>{setFreeShip(e.target.checked);if(e.target.checked)setShippingCost(0);}} style={{accentColor:C.teal}} />
+                      <div style={{fontWeight:700,fontSize:12,color:C.teal}}>🚚 Envío GRATIS</div>
                     </label>
                   </div>
                   {!freeShipping && (
@@ -3411,6 +3859,8 @@ function PayoutsPage({ user, users, orders, nav, requestPayout, payReqs, setPayR
     setRequesting(true);
     await requestPayout(a);
     setAmount("");
+    const updated = await (async()=>{try{const r=await window.storage?.get("v5_preqs");return r?.value?JSON.parse(r.value):[];}catch{return [];}})();
+    if(setPayReqs) setPayReqs(updated);
     setRequesting(false);
   };
 
@@ -3519,7 +3969,6 @@ function PayoutsPage({ user, users, orders, nav, requestPayout, payReqs, setPayR
       {!walletBalance && !myReqs.length && (
         <div style={{textAlign:"center",padding:40,color:C.muted}}><div style={{fontSize:44}}>💸</div><div style={{marginTop:10,fontWeight:600}}>Tu bolsa está vacía</div><div style={{fontSize:12,marginTop:5}}>Los fondos se acumulan al confirmar entregas</div></div>
       )}
-    </div>
     </MerchantShell>
   );
 }
@@ -3534,8 +3983,7 @@ function BankSettingsPage({ user, users, upU, nav, showT }) {
   const [holder,       setHolder]  = useState(mu?.bankData?.accountHolder || "");
   const [rif,          setRif]     = useState(mu?.bankData?.rif || "");
   const [phone,        setPhone]   = useState(mu?.bankData?.phone || "");
-  const [pickupAddr,   setPickupAddr] = useState(mu?.pickupAddress || "");
-  const [pickupSched,  setPickupSched]= useState(mu?.pickupSchedule || "");
+
   const [saving,       setSaving]  = useState(false);
   const [confirmed,    setConfirmed]= useState(false);
 
@@ -3546,7 +3994,7 @@ function BankSettingsPage({ user, users, upU, nav, showT }) {
     if(!confirmed) { showT("Debes confirmar que los datos son correctos",true); return; }
     setSaving(true);
     const bankData = { bank, account, accountHolder:holder, rif, phone };
-    const updated = users.map(u => u.id===user.id ? {...u, bankData, pickupAddress:pickupAddr.trim(), pickupSchedule:pickupSched.trim()} : u);
+    const updated = users.map(u => u.id===user.id ? {...u, bankData} : u);
     await upU(updated);
     setSaving(false);
     showT("Datos guardados ✓");
@@ -3589,22 +4037,6 @@ function BankSettingsPage({ user, users, upU, nav, showT }) {
         <div>
           <label style={{fontSize:13,fontWeight:700,display:"block",marginBottom:5}}>Teléfono PagoMóvil (opcional)</label>
           <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="04XX-XXXXXXX" style={inp} />
-        </div>
-
-        <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16,marginTop:4}}>
-          <div style={{fontWeight:700,fontSize:14,marginBottom:3,fontFamily:Fh}}>🏪 Datos de Retiro en Tienda</div>
-          <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Esta dirección se mostrará al comprador cuando su pedido esté listo para retirar.</div>
-        </div>
-        <div>
-          <label style={{fontSize:13,fontWeight:700,display:"block",marginBottom:5}}>Dirección de retiro</label>
-          <textarea value={pickupAddr} onChange={e=>setPickupAddr(e.target.value)}
-            placeholder="Ej: CC Sambil, Nivel Feria, Local 142, Chacao, Caracas. Punto de referencia: frente a la fuente principal."
-            style={{...inp,minHeight:70,resize:"vertical",fontFamily:Fb,fontSize:13,lineHeight:1.5}} />
-        </div>
-        <div>
-          <label style={{fontSize:13,fontWeight:700,display:"block",marginBottom:5}}>Horario de atención</label>
-          <input value={pickupSched} onChange={e=>setPickupSched(e.target.value)}
-            placeholder="Ej: Lunes a Sábado, 10:00am – 7:00pm" style={inp} />
         </div>
 
         {/* Preview */}
@@ -3768,13 +4200,24 @@ function AdminProductCard({ p, nav, adminDisableProduct, adminEnableProduct }) {
 
 function AdminPanel({ users,products,orders,nav,updateStatus,verifyMerchant,showT,upU,upP,upO,completePayout,payReqs,setPayReqs,appCfg,setAppCfg,toggleDisable,adminDisableProduct,adminEnableProduct }) {
   const [tab,setTab] = useState("orders");
+  const [merchantQ,setMerchantQ] = useState("");
+  const [buyerQ,   setBuyerQ]    = useState("");
+  const [productQ, setProductQ]  = useState("");
   const pending   = orders.filter(o=>o.status==="submitted" && !(o.deadline && new Date(o.deadline) < new Date()));
-  const disputed  = orders.filter(o=>o.status==="disputed");
+  const disputed  = orders.filter(o=>o.vendors?o.vendors.some(v=>v.status==="disputed"):o.status==="disputed");
   const adminPayReqs = (payReqs||[]).filter(r=>r.status==="pending");
   const merchants = users.filter(u=>u.role==="merchant");
   const buyers    = users.filter(u=>u.role==="buyer");
-  const revenue   = orders.filter(o=>o.status==="released").reduce((s,o)=>s+o.platformFee,0);
-  const escrow    = orders.filter(o=>["submitted","verified","processing","shipped"].includes(o.status)).reduce((s,o)=>s+o.subtotal,0);
+  const filteredMerchants = merchantQ ? merchants.filter(m=>(m.storeName||m.name||"").toLowerCase().includes(merchantQ.toLowerCase())||m.email.toLowerCase().includes(merchantQ.toLowerCase())) : merchants;
+  const filteredBuyers    = buyerQ    ? buyers.filter(u=>u.name.toLowerCase().includes(buyerQ.toLowerCase())||u.email.toLowerCase().includes(buyerQ.toLowerCase())) : buyers;
+  const filteredProducts  = productQ  ? products.filter(p=>(p.name||"").toLowerCase().includes(productQ.toLowerCase())||(p.merchantName||"").toLowerCase().includes(productQ.toLowerCase())) : products;
+  const revenue   = orders.filter(o=>o.status==="released").reduce((s,o)=>{
+    const v = o.vendors?.reduce((vs,v)=>vs+(+v.platformFee||0),0);
+    return s + (v ?? (+o.platformFee||0));
+  },0);
+  const escrow    = orders.filter(o=>["submitted","verified","processing","shipped"].includes(o.status)).reduce((s,o)=>{
+    return s + (+o.grandTotal || o.vendors?.reduce((vs,v)=>vs+v.subtotal+(v.shippingCost||0),0) || +o.subtotal || 0);
+  },0);
   const tabs = [[`orders`,`📋 Órdenes${disputed.length>0?" ⚠️":""}`],[`payouts`,`💸 Liquidaciones${adminPayReqs.length>0?" ("+adminPayReqs.length+")":""}`],["merchants","🏪 Vendedores"],["users","👥 Compradores"],["products","🛍️ Productos"],["analytics","📊 Analytics"],["config","⚙️ Config"]];
   return (
     <div style={{maxWidth:1100,margin:"0 auto",padding:"20px 14px"}}>
@@ -3889,10 +4332,17 @@ function AdminPanel({ users,products,orders,nav,updateStatus,verifyMerchant,show
 
       {tab==="merchants" && (
         <div>
-          <h3 style={{fontFamily:Fh,margin:"0 0 11px",fontSize:14,fontWeight:800}}>Vendedores ({merchants.length})</h3>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11,gap:10}}>
+            <h3 style={{fontFamily:Fh,margin:0,fontSize:14,fontWeight:800}}>Vendedores ({filteredMerchants.length}{merchantQ?` de ${merchants.length}`:""})</h3>
+            <input value={merchantQ} onChange={e=>setMerchantQ(e.target.value)} placeholder="🔍 Buscar vendedor…"
+              style={{...inp,fontSize:12,padding:"5px 10px",maxWidth:220,flex:1}} />
+          </div>
           <div style={{display:"flex",flexDirection:"column",gap:9}}>
-            {merchants.map(m=>{
-              const mRev=orders.filter(o=>o.merchantId===m.id&&o.status==="released").reduce((s,o)=>s+o.subtotal,0);
+            {filteredMerchants.map(m=>{
+              const mRev=orders.filter(o=>o.vendors?o.vendors.some(v=>v.merchantId===m.id):o.merchantId===m.id).reduce((s,o)=>{
+                if(o.vendors){const v=o.vendors.find(v=>v.merchantId===m.id);return s+(v?.merchantAmount||0);}
+                return o.status==="released"?s+(o.merchantAmount||0):s;
+              },0);
               return (
                 <div key={m.id} style={{...card,padding:14}}>
                   <div style={{display:"flex",alignItems:"center",gap:11,flexWrap:"wrap"}}>
@@ -3916,9 +4366,13 @@ function AdminPanel({ users,products,orders,nav,updateStatus,verifyMerchant,show
 
       {tab==="users" && (
         <div>
-          <h3 style={{fontFamily:Fh,margin:"0 0 11px",fontSize:14,fontWeight:800}}>Compradores ({buyers.length})</h3>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11,gap:10}}>
+            <h3 style={{fontFamily:Fh,margin:0,fontSize:14,fontWeight:800}}>Compradores ({filteredBuyers.length}{buyerQ?` de ${buyers.length}`:""})</h3>
+            <input value={buyerQ} onChange={e=>setBuyerQ(e.target.value)} placeholder="🔍 Buscar comprador…"
+              style={{...inp,fontSize:12,padding:"5px 10px",maxWidth:220,flex:1}} />
+          </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {buyers.map(u=>{
+            {filteredBuyers.map(u=>{
               const uo=orders.filter(o=>o.buyerId===u.id);
               return (
                 <div key={u.id} style={{...card,padding:13}}>
@@ -3941,9 +4395,13 @@ function AdminPanel({ users,products,orders,nav,updateStatus,verifyMerchant,show
 
       {tab==="products" && (
         <div>
-          <h3 style={{fontFamily:Fh,margin:"0 0 11px",fontSize:14,fontWeight:800}}>Todos los productos ({products.length})</h3>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11,gap:10}}>
+            <h3 style={{fontFamily:Fh,margin:0,fontSize:14,fontWeight:800}}>Productos ({filteredProducts.length}{productQ?` de ${products.length}`:""})</h3>
+            <input value={productQ} onChange={e=>setProductQ(e.target.value)} placeholder="🔍 Buscar producto o vendedor…"
+              style={{...inp,fontSize:12,padding:"5px 10px",maxWidth:250,flex:1}} />
+          </div>
           <div className="vy-grid">
-            {products.map(p=>(
+            {filteredProducts.map(p=>(
               <AdminProductCard key={p.id} p={p} nav={nav} adminDisableProduct={adminDisableProduct} adminEnableProduct={adminEnableProduct} />
             ))}
           </div>
@@ -4112,8 +4570,7 @@ function AdminConfig({ appCfg, setAppCfg, showT }) {
   const save = async () => {
     setSaving(true);
     const cfg = {minPayout:+minPayout, platformFee:+(+feePct/100).toFixed(4)};
-    await sSet("v5_cfg", cfg);
-    setAppCfg(cfg);
+    await setAppCfg(cfg);  // routes through actions.updateAppCfg
     setSaving(false);
     showT("Configuración guardada ✓");
   };
