@@ -717,8 +717,8 @@ function Header({ user,cartCount,unread,nav,logout,markAllRead,products }) {
               </button>
               <button className="hop" onClick={() => setMenu(v=>!v)}
                 style={{...btn("rgba(255,255,255,.1)","#fff"),padding:"5px 10px",fontSize:12,border:"1px solid rgba(255,255,255,.14)",gap:6}}>
-                <div style={{width:22,height:22,borderRadius:"50%",background:C.red,color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{user.name[0].toUpperCase()}</div>
-                <span className="hide-sm">{user.name.split(" ")[0]}</span>
+                <div style={{width:22,height:22,borderRadius:"50%",background:C.red,color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{(user.name||user.email||'?')[0].toUpperCase()}</div>
+                <span className="hide-sm">{(user.name||user.email||'').split(" ")[0]}</span>
               </button>
               {menu && (
                 <div style={{position:"absolute",right:0,top:"calc(100% + 8px)",background:C.white,border:`1px solid ${C.border}`,borderRadius:12,padding:6,minWidth:210,boxShadow:"0 12px 32px rgba(0,0,0,.15)",zIndex:400,animation:"vy-fade .15s ease"}} onClick={() => setMenu(false)}>
@@ -1591,7 +1591,7 @@ function ProductPage({ products, orders, users, params, nav, addToCart, user, ra
             {productReviews.map((r,i) => (
               <div key={i} style={{padding:"12px 14px",background:C.bg,borderRadius:9,borderLeft:`3px solid ${C.gold}`}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-                  <div style={{width:28,height:28,borderRadius:"50%",background:C.navy,color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{r.buyerName[0].toUpperCase()}</div>
+                  <div style={{width:28,height:28,borderRadius:"50%",background:C.navy,color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{(r.buyerName||'?')[0].toUpperCase()}</div>
                   <div>
                     <div style={{fontSize:12,fontWeight:700}}>{r.buyerName}</div>
                     <div style={{display:"flex",alignItems:"center",gap:5}}><Stars v={r.rating} size={12} /><span style={{fontSize:10,color:C.muted}}>{ago(r.createdAt)}</span></div>
@@ -1769,7 +1769,7 @@ function MerchantProfile({ users,products,orders,params,nav,user,toggleFollow,ad
               <div style={{flex:1}}>
                 {r.productName && <div style={{fontSize:11,color:C.navy,fontWeight:700,marginBottom:3}}>📦 {r.productName}</div>}
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                  <div style={{width:24,height:24,borderRadius:"50%",background:C.muted,color:"#fff",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{r.buyerName[0].toUpperCase()}</div>
+                  <div style={{width:24,height:24,borderRadius:"50%",background:C.muted,color:"#fff",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{(r.buyerName||'?')[0].toUpperCase()}</div>
                   <span style={{fontSize:12,fontWeight:700}}>{r.buyerName}</span>
                   <Stars v={r.rating} size={12} />
                   <span style={{fontSize:10,color:C.muted}}>{ago(r.createdAt)}</span>
@@ -4333,7 +4333,7 @@ function AdminPanel({ users,products,orders,nav,updateStatus,verifyMerchant,show
               return (
                 <div key={u.id} style={{...card,padding:13}}>
                   <div style={{display:"flex",alignItems:"center",gap:11,flexWrap:"wrap"}}>
-                    <div style={{width:36,height:36,borderRadius:"50%",background:C.navy,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#fff",fontWeight:700,flexShrink:0}}>{u.name[0].toUpperCase()}</div>
+                    <div style={{width:36,height:36,borderRadius:"50%",background:C.navy,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#fff",fontWeight:700,flexShrink:0}}>{(u.name||u.email||'?')[0].toUpperCase()}</div>
                     <div style={{flex:1}}><div style={{fontWeight:600,fontSize:13}}>{u.name}</div><div style={{fontSize:11,color:C.muted}}>{u.email} · 📍{u.location} · {uo.length} órdenes</div></div>
                     {u.disabled && <Pill label="Deshabilitada" c="#991B1B" />}
                     <button onClick={()=>toggleDisable(u.id)}
