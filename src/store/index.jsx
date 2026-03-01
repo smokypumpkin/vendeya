@@ -24,8 +24,33 @@ import { toNotif } from '../lib/transforms.js'
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
+const sanitizeCart = (raw) => {
+  if (!Array.isArray(raw)) return []
+  const cleaned = raw
+    .filter(item => item && typeof item.productId === 'string')
+    .map(item => {
+      const qty = Number(item.qty) > 0 ? Math.floor(Number(item.qty)) : 1
+      return {
+        productId: item.productId,
+        qty,
+        product: item.product && typeof item.product === 'object' ? item.product : null,
+      }
+    })
+  const seen = new Set()
+  return cleaned.filter(item => {
+    if (seen.has(item.productId)) return false
+    seen.add(item.productId)
+    return true
+  })
+}
+
 const initCart = () => {
-  try { return JSON.parse(localStorage.getItem('vy_cart') || '[]') } catch { return [] }
+  try {
+    const raw = JSON.parse(localStorage.getItem('vy_cart') || '[]')
+    return sanitizeCart(raw)
+  } catch {
+    return []
+  }
 }
 
 const INIT_STATE = {
@@ -252,6 +277,27 @@ export function StoreProvider({ children }) {
       unsubRealtime?.()
     }
   }, []) // eslint-disable-line
+
+  // Keep persisted cart aligned with fresh product data.
+  useEffect(() => {
+    if (!state.products.length || !state.cart.length) return
+    const byId = new Map(state.products.map(p => [p.id, p]))
+    let changed = false
+    const nextCart = state.cart
+      .map(item => {
+        const latest = byId.get(item.productId)
+        if (!latest || !latest.active || latest.stock < 1) {
+          changed = true
+          return null
+        }
+        const nextQty = Math.min(item.qty, latest.stock)
+        if (nextQty !== item.qty || item.product !== latest) changed = true
+        return { ...item, qty: nextQty, product: latest }
+      })
+      .filter(Boolean)
+    if (!changed) return
+    dispatch({ type: 'SET_CART', payload: nextCart })
+  }, [state.products, state.cart])
 
   return (
     <StateCtx.Provider value={{ state, toast }}>

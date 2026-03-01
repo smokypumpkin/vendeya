@@ -4,7 +4,8 @@ import { StoreProvider } from './store/index.jsx' // updated
 import App from './App.jsx'
 
 const root = ReactDOM.createRoot(document.getElementById('root'))
-document.getElementById('loading').style.display = 'none'
+const loadingEl = document.getElementById('loading')
+if (loadingEl) loadingEl.style.display = 'none'
 
 root.render(
   <StoreProvider>

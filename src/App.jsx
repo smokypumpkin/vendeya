@@ -3,6 +3,7 @@
  * State: store/index.jsx | Logic: hooks/useActions.jsx | API: api/index.jsx
  */
 import { useState, useEffect, useCallback } from "react"
+import { lazy, Suspense } from "react"
 import { useAppState, useToast } from "./store/index.jsx"
 import { useActions } from "./hooks/useActions.jsx"
 
@@ -12,26 +13,53 @@ import { Spin, btn } from "./components/ui.jsx"
 import { useSchema } from "./components/SmartSearch.jsx"
 import { Header } from "./components/Header.jsx"
 
-import { LandingPage }        from "./pages/LandingPage.jsx"
-import { BrowsePage }         from "./pages/BrowsePage.jsx"
-import { ProductPage }        from "./pages/ProductPage.jsx"
-import { MerchantProfile }    from "./pages/MerchantProfile.jsx"
-import { CartPage }           from "./pages/CartPage.jsx"
-import { CheckoutPage }       from "./pages/CheckoutPage.jsx"
-import { AuthPage }           from "./pages/AuthPage.jsx"
-import { FavoritesPage }      from "./pages/FavoritesPage.jsx"
-import { MyOrdersPage }       from "./pages/MyOrdersPage.jsx"
-import { OrderDetailPage }    from "./pages/OrderDetailPage.jsx"
-import { NotificationsPage }  from "./pages/NotificationsPage.jsx"
-import { MerchantDash }       from "./pages/merchant/Dash.jsx"
-import { MerchantProducts }   from "./pages/merchant/Products.jsx"
-import { MerchantAddEdit }    from "./pages/merchant/AddEdit.jsx"
-import { MerchantOrders }     from "./pages/merchant/Orders.jsx"
-import { MerchantAnalytics }  from "./pages/merchant/Analytics.jsx"
-import { MerchantQA }         from "./pages/merchant/QA.jsx"
-import { PayoutsPage }        from "./pages/PayoutsPage.jsx"
-import { BankSettingsPage }   from "./pages/BankSettingsPage.jsx"
-import { AdminPanel }         from "./pages/admin/Panel.jsx"
+const LandingPage = lazy(() => import("./pages/LandingPage.jsx").then(m => ({ default: m.LandingPage })))
+const BrowsePage = lazy(() => import("./pages/BrowsePage.jsx").then(m => ({ default: m.BrowsePage })))
+const ProductPage = lazy(() => import("./pages/ProductPage.jsx").then(m => ({ default: m.ProductPage })))
+const MerchantProfile = lazy(() => import("./pages/MerchantProfile.jsx").then(m => ({ default: m.MerchantProfile })))
+const CartPage = lazy(() => import("./pages/CartPage.jsx").then(m => ({ default: m.CartPage })))
+const CheckoutPage = lazy(() => import("./pages/CheckoutPage.jsx").then(m => ({ default: m.CheckoutPage })))
+const AuthPage = lazy(() => import("./pages/AuthPage.jsx").then(m => ({ default: m.AuthPage })))
+const FavoritesPage = lazy(() => import("./pages/FavoritesPage.jsx").then(m => ({ default: m.FavoritesPage })))
+const MyOrdersPage = lazy(() => import("./pages/MyOrdersPage.jsx").then(m => ({ default: m.MyOrdersPage })))
+const OrderDetailPage = lazy(() => import("./pages/OrderDetailPage.jsx").then(m => ({ default: m.OrderDetailPage })))
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage.jsx").then(m => ({ default: m.NotificationsPage })))
+const MerchantDash = lazy(() => import("./pages/merchant/Dash.jsx").then(m => ({ default: m.MerchantDash })))
+const MerchantProducts = lazy(() => import("./pages/merchant/Products.jsx").then(m => ({ default: m.MerchantProducts })))
+const MerchantAddEdit = lazy(() => import("./pages/merchant/AddEdit.jsx").then(m => ({ default: m.MerchantAddEdit })))
+const MerchantOrders = lazy(() => import("./pages/merchant/Orders.jsx").then(m => ({ default: m.MerchantOrders })))
+const MerchantAnalytics = lazy(() => import("./pages/merchant/Analytics.jsx").then(m => ({ default: m.MerchantAnalytics })))
+const MerchantQA = lazy(() => import("./pages/merchant/QA.jsx").then(m => ({ default: m.MerchantQA })))
+const PayoutsPage = lazy(() => import("./pages/PayoutsPage.jsx").then(m => ({ default: m.PayoutsPage })))
+const BankSettingsPage = lazy(() => import("./pages/BankSettingsPage.jsx").then(m => ({ default: m.BankSettingsPage })))
+const AdminPanel = lazy(() => import("./pages/admin/Panel.jsx").then(m => ({ default: m.AdminPanel })))
+
+const ROUTES = new Set([
+  "landing", "browse", "product", "merchant-profile", "cart", "checkout", "login", "register",
+  "favorites", "my-orders", "order-detail", "notifications", "merchant-dash", "merchant-products",
+  "merchant-add", "merchant-orders", "merchant-analytics", "merchant-qa", "payouts", "bank-settings", "admin",
+])
+
+const parseUrlState = () => {
+  const slug = window.location.pathname.replace(/^\/+/, "").split("/")[0] || "landing"
+  const page = ROUTES.has(slug) ? slug : "landing"
+  const params = {}
+  const qs = new URLSearchParams(window.location.search)
+  qs.forEach((value, key) => {
+    params[key] = value
+  })
+  return { pg: page, ps: params }
+}
+
+const toUrl = (pg, ps = {}) => {
+  if (pg === "landing") return "/"
+  const qs = new URLSearchParams()
+  Object.entries(ps || {}).forEach(([key, val]) => {
+    if (val !== undefined && val !== null && val !== "") qs.set(key, String(val))
+  })
+  const suffix = qs.toString()
+  return suffix ? `/${pg}?${suffix}` : `/${pg}`
+}
 
 function SchemaBase() {
   useSchema([
@@ -68,8 +96,8 @@ export default function App() {
   const showT   = useToast()
   const actions = useActions()
 
-  const [page,      setPage]      = useState("landing")
-  const [params,    setParams]    = useState({})
+  const [page,      setPage]      = useState(() => parseUrlState().pg)
+  const [params,    setParams]    = useState(() => parseUrlState().ps)
   const [rateLabel, setRateLabel] = useState("BCV")
 
   // Fetch BCV rate label
@@ -82,13 +110,27 @@ export default function App() {
   }, [])
 
   // History API routing
-  const nav = useCallback((pg, ps={}) => {
-    setPage(pg); setParams(ps); window.scrollTo(0,0)
-    window.history.pushState({pg,ps}, "", pg==="landing" ? "/" : `/${pg}`)
+  const nav = useCallback((pg, ps = {}) => {
+    setPage(pg)
+    setParams(ps)
+    window.scrollTo(0, 0)
+    window.history.pushState({ pg, ps }, "", toUrl(pg, ps))
   }, [])
 
   useEffect(() => {
-    const onPop = e => { const s=e.state||{pg:"landing",ps:{}}; setPage(s.pg||"landing"); setParams(s.ps||{}); window.scrollTo(0,0) }
+    if (!window.history.state?.pg) {
+      const initial = parseUrlState()
+      window.history.replaceState(initial, "", toUrl(initial.pg, initial.ps))
+      setPage(initial.pg)
+      setParams(initial.ps)
+    }
+
+    const onPop = (e) => {
+      const s = e.state || parseUrlState()
+      setPage(s.pg || "landing")
+      setParams(s.ps || {})
+      window.scrollTo(0, 0)
+    }
     window.addEventListener("popstate", onPop)
     return () => window.removeEventListener("popstate", onPop)
   }, [])
@@ -139,7 +181,10 @@ export default function App() {
       merchantId:vendors[0]?.merchantId||null,
     }
     const result = await actions.placeOrder(orderData)
-    if(!result?.error) nav("order-detail", {orderId})
+    if (!result?.error) {
+      actions.clearCart()
+      nav("order-detail", { orderId })
+    }
     return result
   }, [cart, profiles, appCfg, user, actions, nav])
 
@@ -172,6 +217,7 @@ export default function App() {
     addToCart:      actions.addToCart,
     removeFromCart: actions.removeFromCart,
     setCartQty:     actions.setCartQty,
+    clearCart:      actions.clearCart,
     // Favorites
     toggleFav:      async (productId) => {
       if(!user) { nav("login"); return }
@@ -247,28 +293,31 @@ export default function App() {
         .page-wrap{padding:16px 14px}
         @media(min-width:900px){.page-wrap{max-width:960px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 2px 20px rgba(0,0,0,.06);padding:28px 32px;margin-top:20px;margin-bottom:20px}}
       `}</style>
+      <SchemaBase />
       <Header {...ctx} />
       <main style={{paddingBottom:80,background:C.bg,minHeight:"calc(100vh - 64px)"}}>
-        {page==="landing"            && <LandingPage      {...ctx} />}
-        {page==="browse"             && <BrowsePage       {...ctx} />}
-        {page==="product"            && <ProductPage      {...ctx} />}
-        {page==="merchant-profile"   && <MerchantProfile  {...ctx} />}
-        {page==="cart"               && <CartPage         {...ctx} />}
-        {page==="checkout"           && <CheckoutPage     {...ctx} />}
-        {(page==="login"||page==="register") && <AuthPage {...ctx} initMode={page} />}
-        {page==="favorites"          && <FavoritesPage    {...ctx} />}
-        {page==="my-orders"          && <MyOrdersPage     {...ctx} />}
-        {page==="order-detail"       && <OrderDetailPage  {...ctx} />}
-        {page==="notifications"      && <NotificationsPage {...ctx} />}
-        {page==="merchant-dash"      && <MerchantDash     {...ctx} />}
-        {page==="merchant-products"  && <MerchantProducts {...ctx} />}
-        {page==="merchant-add"       && <MerchantAddEdit  {...ctx} />}
-        {page==="merchant-orders"    && <MerchantOrders   {...ctx} />}
-        {page==="merchant-analytics" && <MerchantAnalytics {...ctx} />}
-        {page==="merchant-qa"        && <MerchantQA       {...ctx} />}
-        {page==="payouts"            && <PayoutsPage      {...ctx} />}
-        {page==="bank-settings"      && <BankSettingsPage {...ctx} />}
-        {user?.role==="admin" && page==="admin" && <AdminPanel {...ctx} />}
+        <Suspense fallback={<div style={{padding:20,color:C.muted}}><Spin dark /> Cargando...</div>}>
+          {page==="landing"            && <LandingPage      {...ctx} />}
+          {page==="browse"             && <BrowsePage       {...ctx} />}
+          {page==="product"            && <ProductPage      {...ctx} />}
+          {page==="merchant-profile"   && <MerchantProfile  {...ctx} />}
+          {page==="cart"               && <CartPage         {...ctx} />}
+          {page==="checkout"           && <CheckoutPage     {...ctx} />}
+          {(page==="login"||page==="register") && <AuthPage {...ctx} initMode={page} />}
+          {page==="favorites"          && <FavoritesPage    {...ctx} />}
+          {page==="my-orders"          && <MyOrdersPage     {...ctx} />}
+          {page==="order-detail"       && <OrderDetailPage  {...ctx} />}
+          {page==="notifications"      && <NotificationsPage {...ctx} />}
+          {page==="merchant-dash"      && <MerchantDash     {...ctx} />}
+          {page==="merchant-products"  && <MerchantProducts {...ctx} />}
+          {page==="merchant-add"       && <MerchantAddEdit  {...ctx} />}
+          {page==="merchant-orders"    && <MerchantOrders   {...ctx} />}
+          {page==="merchant-analytics" && <MerchantAnalytics {...ctx} />}
+          {page==="merchant-qa"        && <MerchantQA       {...ctx} />}
+          {page==="payouts"            && <PayoutsPage      {...ctx} />}
+          {page==="bank-settings"      && <BankSettingsPage {...ctx} />}
+          {user?.role==="admin" && page==="admin" && <AdminPanel {...ctx} />}
+        </Suspense>
       </main>
       {toast && (
         <div style={{position:"fixed",bottom:22,left:"50%",transform:"translateX(-50%)",background:toast.isError?"#7F1D1D":C.navy,color:"#fff",padding:"11px 24px",borderRadius:12,fontSize:13,fontWeight:500,zIndex:9999,boxShadow:"0 8px 28px rgba(0,0,0,.25)",maxWidth:"92vw",textAlign:"center",animation:"vy-fade .2s ease",pointerEvents:"none"}}>
