@@ -137,7 +137,7 @@ export default function App() {
 
   // Derived
   const cartCount = cart.reduce((s,i)=>s+i.qty, 0)
-  const cartTotal = cart.reduce((s,i)=>s+(i.product.salePrice||i.product.price)*i.qty, 0)
+  const cartTotal = cart.reduce((s,i)=>s+(i.product?(i.product.salePrice||i.product.price):0)*i.qty, 0)
   const myNotifs  = notifs.filter(n=>n.userId===user?.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
   const unread    = myNotifs.filter(n=>!n.read&&!n.done).length
 
@@ -304,19 +304,19 @@ export default function App() {
           {page==="cart"               && <CartPage         {...ctx} />}
           {page==="checkout"           && <CheckoutPage     {...ctx} />}
           {(page==="login"||page==="register") && <AuthPage {...ctx} initMode={page} />}
-          {page==="favorites"          && <FavoritesPage    {...ctx} />}
-          {page==="my-orders"          && <MyOrdersPage     {...ctx} />}
-          {page==="order-detail"       && <OrderDetailPage  {...ctx} />}
-          {page==="notifications"      && <NotificationsPage {...ctx} />}
-          {page==="merchant-dash"      && <MerchantDash     {...ctx} />}
-          {page==="merchant-products"  && <MerchantProducts {...ctx} />}
-          {page==="merchant-add"       && <MerchantAddEdit  {...ctx} />}
-          {page==="merchant-orders"    && <MerchantOrders   {...ctx} />}
-          {page==="merchant-analytics" && <MerchantAnalytics {...ctx} />}
-          {page==="merchant-qa"        && <MerchantQA       {...ctx} />}
-          {page==="payouts"            && <PayoutsPage      {...ctx} />}
-          {page==="bank-settings"      && <BankSettingsPage {...ctx} />}
-          {user?.role==="admin" && page==="admin" && <AdminPanel {...ctx} />}
+          {page==="favorites"          && (!user?(nav("login",{returnTo:"favorites"})||null):<FavoritesPage    {...ctx} />)}
+          {page==="my-orders"          && (!user?(nav("login",{returnTo:"my-orders"})||null):<MyOrdersPage     {...ctx} />)}
+          {page==="order-detail"       && (!user?(nav("login",{returnTo:"order-detail",...params})||null):<OrderDetailPage  {...ctx} />)}
+          {page==="notifications"      && (!user?(nav("login",{returnTo:"notifications"})||null):<NotificationsPage {...ctx} />)}
+          {page==="merchant-dash"      && (!user?(nav("login",{returnTo:"merchant-dash"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<MerchantDash     {...ctx} />)}
+          {page==="merchant-products"  && (!user?(nav("login",{returnTo:"merchant-products"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<MerchantProducts {...ctx} />)}
+          {page==="merchant-add"       && (!user?(nav("login",{returnTo:"merchant-add"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<MerchantAddEdit  {...ctx} />)}
+          {page==="merchant-orders"    && (!user?(nav("login",{returnTo:"merchant-orders"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<MerchantOrders   {...ctx} />)}
+          {page==="merchant-analytics" && (!user?(nav("login",{returnTo:"merchant-analytics"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<MerchantAnalytics {...ctx} />)}
+          {page==="merchant-qa"        && (!user?(nav("login",{returnTo:"merchant-qa"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<MerchantQA       {...ctx} />)}
+          {page==="payouts"            && (!user?(nav("login",{returnTo:"payouts"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<PayoutsPage      {...ctx} />)}
+          {page==="bank-settings"      && (!user?(nav("login",{returnTo:"bank-settings"})||null):(user.role!=="merchant"&&user.role!=="admin")?(nav("landing")||null):<BankSettingsPage {...ctx} />)}
+          {page==="admin"              && (!user?(nav("login",{returnTo:"admin"})||null):user.role!=="admin"?(nav("landing")||null):<AdminPanel {...ctx} />)}
         </Suspense>
       </main>
       {toast && (

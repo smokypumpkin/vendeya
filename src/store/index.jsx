@@ -205,13 +205,22 @@ export function StoreProvider({ children }) {
     const withTimeout = (promise, ms) =>
       Promise.race([promise, new Promise(resolve => setTimeout(resolve, ms))])
 
+    // Tracks whether boot already loaded private data for a given user.
+    // Prevents duplicate loadPrivate() when onAuthStateChange fires SIGNED_IN
+    // concurrently with boot (can happen in older Supabase SDK versions or on
+    // token restore before boot step 3 completes).
+    let privateLoadedForUserId = null
+
     const boot = async () => {
       // 1. Public data — with 8s timeout so it never hangs forever
       await withTimeout(loadPublic(), 8000)
 
-      // 2. Exchange rate (BCV)
+      // 2. Exchange rate (BCV) — 3 s timeout so a hanging network never blocks boot
       try {
-        const r = await fetch('https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd')
+        const ctrl = new AbortController()
+        const bcvTimer = setTimeout(() => ctrl.abort(), 3000)
+        const r = await fetch('https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd', { signal: ctrl.signal })
+        clearTimeout(bcvTimer)
         const j = await r.json()
         const v = j?.price || j?.data?.price
         if (v && +v > 1) dispatch({ type: 'SET_RATE', payload: +v })
@@ -229,6 +238,7 @@ export function StoreProvider({ children }) {
               sessionRef.current = session
             }
             await loadPrivate(session.user.id)
+            privateLoadedForUserId = session.user.id
           }
         } catch {}
       })(), 6000)
@@ -258,16 +268,25 @@ export function StoreProvider({ children }) {
 
     boot()
 
-    // 5. Auth state changes (login from another tab, deep-link OAuth, etc.)
+    // 5. Auth state changes (login from another tab, deep-link OAuth, token refresh, etc.)
     const { data: { subscription } } = authApi.onAuthChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session?.user) {
+        // Keep session ref up-to-date
+        sessionRef.current = session
+        // Skip if boot already loaded private data for this same user —
+        // avoids duplicate API calls when SIGNED_IN fires immediately on subscribe
+        if (privateLoadedForUserId === session.user.id) return
         const profile = await ensureProfile(session.user)
         if (profile) {
           dispatch({ type: 'SET_USER', payload: profile })
-          sessionRef.current = session
         }
         await loadPrivate(session.user.id)
+        privateLoadedForUserId = session.user.id
+      } else if (event === 'TOKEN_REFRESHED' && session) {
+        // Keep sessionRef fresh so realtime notification queries never use a stale token
+        sessionRef.current = session
       } else if (event === 'SIGNED_OUT') {
+        privateLoadedForUserId = null
         dispatch({ type: 'SIGN_OUT' })
       }
     })
