@@ -26,24 +26,37 @@ export function AuthPage({ login,register,verifyEmail,nav,initMode="login",param
   const [codeErr, setCodeErr] = useState("");
 
   const handle = async () => {
-    setErr(""); setLoading(true);
-    await new Promise(r => setTimeout(r,500));
-    if(isLogin) {
-      const r = await login(email,pw);
-      if(r?.error==="not_verified") { const c=gC(); setVs({userId:r.userId,code:c,email}); setLoading(false); return; }
-      if(r?.error) { setErr(r.error); setLoading(false); return; }
-      const ret = params?.returnTo;
-      const retParams = params?.returnToParams || {};
-      nav(ret ? ret : r.user.role==="admin"?"admin":r.user.role==="merchant"?"merchant-dash":"landing",
-          {...retParams, ...(params?.pendingFav ? {pendingFav:params.pendingFav} : {})});
-    } else {
-      if(!name||!email||!pw||!location) { setErr("Completa todos los campos."); setLoading(false); return; }
-      const r = await register({name,email,password:pw,role,location,...(role==="merchant"?{storeName:storeN||`${name} Store`,storeDesc:storeD,storeLogo,bankData}:{storeName:"",storeDesc:""})});
-      if(r.error) { setErr(r.error); setLoading(false); return; }
-      if(!r.user) { setErr("Error al crear cuenta. Intenta de nuevo."); setLoading(false); return; }
-      const c = gC(); setVs({userId:r.user.id,code:c,email});
+    setErr("");
+    setLoading(true);
+    try {
+      await new Promise(r => setTimeout(r,500));
+      if (isLogin) {
+        const r = await login(email,pw);
+        if (r?.error === "not_verified") {
+          const c = gC();
+          setVs({ userId:r.userId, code:c, email });
+          return;
+        }
+        if (r?.error || !r?.user) {
+          setErr(r?.error || "No se pudo iniciar sesión. Intenta de nuevo.");
+          return;
+        }
+        const ret = params?.returnTo;
+        const retParams = params?.returnToParams || {};
+        nav(ret ? ret : r.user.role==="admin"?"admin":r.user.role==="merchant"?"merchant-dash":"landing",
+            {...retParams, ...(params?.pendingFav ? {pendingFav:params.pendingFav} : {})});
+      } else {
+        if(!name||!email||!pw||!location) { setErr("Completa todos los campos."); return; }
+        const r = await register({name,email,password:pw,role,location,...(role==="merchant"?{storeName:storeN||`${name} Store`,storeDesc:storeD,storeLogo,bankData}:{storeName:"",storeDesc:""})});
+        if(r?.error) { setErr(r.error); return; }
+        if(!r?.user) { setErr("Error al crear cuenta. Intenta de nuevo."); return; }
+        const c = gC(); setVs({userId:r.user.id,code:c,email});
+      }
+    } catch {
+      setErr("Error de conexión. Verifica internet e intenta otra vez.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
   const handleVerify = async () => {
     setCodeErr("");
