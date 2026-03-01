@@ -14,7 +14,7 @@
  * Private data (needs auth): orders, notifs, favs, payReqs
  */
 
-import React, { createContext, useContext, useReducer, useEffect, useCallback, useRef } from 'react'
+import { createContext, useContext, useReducer, useEffect, useCallback, useRef } from 'react'
 import { supabase as sb } from '../lib/supabase.js'
 import {
   authApi, profilesApi, productsApi, ordersApi, reviewsApi,
@@ -177,29 +177,33 @@ export function StoreProvider({ children }) {
     }
 
     const boot = async () => {
-      // 1. Public data first — works without auth
-      await loadPublic()
-
-      // 2. Exchange rate (BCV)
       try {
-        const r = await fetch('https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd')
-        const j = await r.json()
-        const v = j?.price || j?.data?.price
-        if (v && +v > 1) dispatch({ type: 'SET_RATE', payload: +v })
-      } catch {}
+        // 1. Public data first — works without auth
+        await loadPublic()
 
-      // 3. Restore existing session
-      const { data: { session } } = await authApi.getSession()
-      if (session?.user) {
-        const profile = await ensureProfile(session.user)
-        if (profile) {
-          dispatch({ type: 'SET_USER', payload: profile })
-          sessionRef.current = session
-        }
-        await loadPrivate(session.user.id)
+        // 2. Exchange rate (BCV)
+        try {
+          const r = await fetch('https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd')
+          const j = await r.json()
+          const v = j?.price || j?.data?.price
+          if (v && +v > 1) dispatch({ type: 'SET_RATE', payload: +v })
+        } catch {}
+
+        // 3. Restore existing session
+        try {
+          const { data: { session } } = await authApi.getSession()
+          if (session?.user) {
+            const profile = await ensureProfile(session.user)
+            if (profile) {
+              dispatch({ type: 'SET_USER', payload: profile })
+              sessionRef.current = session
+            }
+            await loadPrivate(session.user.id)
+          }
+        } catch {}
+      } finally {
+        dispatch({ type: 'READY' })
       }
-
-      dispatch({ type: 'READY' })
 
       // 4. Realtime — keep state in sync across devices/tabs
       unsubRealtime = realtimeApi.subscribe({
