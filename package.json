@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "postinstall": "chmod +x node_modules/.bin/* 2>/dev/null || true",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
