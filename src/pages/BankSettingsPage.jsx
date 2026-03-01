@@ -3,8 +3,8 @@ import { C, Fh } from "../constants.js"
 import { Spin, btn, inp, card } from "../components/ui.jsx"
 import { MerchantShell } from "./merchant/Shell.jsx"
 
-export function BankSettingsPage({ user, users, upU, nav, showT }) {
-  const mu = users?.find(u => u.id === user?.id) || user;
+export function BankSettingsPage({ user, updateProfile, nav, showT }) {
+  const mu = user;
   const [bank,         setBank]    = useState(mu?.bankData?.bank || "");
   const [account,      setAccount] = useState(mu?.bankData?.account || "");
   const [holder,       setHolder]  = useState(mu?.bankData?.accountHolder || "");
@@ -21,8 +21,7 @@ export function BankSettingsPage({ user, users, upU, nav, showT }) {
     if(!confirmed) { showT("Debes confirmar que los datos son correctos",true); return; }
     setSaving(true);
     const bankData = { bank, account, accountHolder:holder, rif, phone };
-    const updated = users.map(u => u.id===user.id ? {...u, bankData} : u);
-    await upU(updated);
+    await updateProfile({ bankData });
     setSaving(false);
     showT("Datos guardados ✓");
     nav("payouts");

@@ -4,17 +4,17 @@ import { fU } from "../../utils.js"
 import { Pill, Img, btn, card } from "../../components/ui.jsx"
 import { MerchantShell } from "./Shell.jsx"
 
-export function MerchantProducts({ user,products,upP,nav,showT }) {
+export function MerchantProducts({ user,products,saveProduct,deleteProduct,nav,showT }) {
   const mp = products.filter(p => p.merchantId===user?.id);
   const toggle = async id => {
     const prod = products.find(p=>p.id===id);
     if(prod?.adminDisabledPermanent) { showT("Este producto fue deshabilitado permanentemente por el admin",true); return; }
     if(prod?.adminDisabled) { showT("Pausado por el admin. Contacta soporte para reactivarlo.",true); return; }
     if(prod && !prod.active && prod.stock<=0) { showT("Sin stock: recarga el inventario antes de activar",true); return; }
-    await upP(products.map(p=>p.id===id?{...p,active:!p.active}:p));
+    await saveProduct({...prod, active:!prod.active});
     showT("Actualizado ✓");
   };
-  const del    = async id => { if(!confirm("¿Eliminar?")) return; await upP(products.filter(p=>p.id!==id)); showT("Eliminado"); };
+  const del    = async id => { if(!confirm("¿Eliminar?")) return; await deleteProduct(id); showT("Eliminado"); };
   return (
     <MerchantShell user={user} page="merchant-products" nav={nav}>
     <div style={{maxWidth:900}}>

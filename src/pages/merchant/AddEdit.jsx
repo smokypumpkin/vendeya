@@ -3,7 +3,7 @@ import { C, Fh, Fb, CATS } from "../../constants.js"
 import { uid, fU, compressImg, censorContact } from "../../utils.js"
 import { Spin, btn, inp, card } from "../../components/ui.jsx"
 
-export function MerchantAddEdit({ user,products,upP,nav,showT,params }) {
+export function MerchantAddEdit({ user,products,saveProduct,nav,showT,params }) {
   const ep = params?.editId ? products.find(p=>p.id===params.editId) : null;
   const [name,         setName]        = useState(ep?.name||"");
   const [price,        setPrice]       = useState(ep?.price||"");
@@ -60,11 +60,11 @@ export function MerchantAddEdit({ user,products,upP,nav,showT,params }) {
       merchantLoc:user.location||"Venezuela"
     };
     if(ep) {
-      await upP(products.map(p => p.id===ep.id ? {...p,...data,active:+stock>0?p.active:false} : p));
+      await saveProduct({...ep, ...data, active:+stock>0?ep.active:false});
       showT("Actualizado ✓");
     } else {
       const np = {id:uid(),merchantId:user.id,merchantName:user.storeName||user.name,merchantLoc:user.location||"Venezuela",active:true,views:0,questions:[],createdAt:new Date().toISOString(),...data};
-      await upP([...products,np]);
+      await saveProduct(np);
       showT("Publicado 🎉");
     }
     setSaving(false);

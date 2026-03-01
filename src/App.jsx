@@ -155,16 +155,15 @@ export default function App() {
     register:       actions.register,
     verifyEmail:    async () => {},
     // Profile
-    upU:            async () => {},
-    setUser:        () => {},
+    updateProfile:  actions.updateProfile,
     verifyMerchant: actions.adminVerifyMerchant,
     toggleDisable:  actions.adminToggleDisable,
     // Products
-    upP:            async () => {},
+    saveProduct:    actions.saveProduct,
+    deleteProduct:  actions.deleteProduct,
     adminDisableProduct:  actions.adminDisableProduct,
     adminEnableProduct:   actions.adminEnableProduct,
     // Orders
-    upO:            async () => {},
     placeOrder,
     updateStatus:   actions.updateOrderStatus,
     submitReview:   (orderId, rating, comment, vendorMerchantId) =>
@@ -189,7 +188,6 @@ export default function App() {
     // Notifications
     markAllRead:    actions.markAllNotifsRead,
     markNotifDone:  actions.markNotifDone,
-    upN:            async () => {},
     note:           actions.sendNotif,
     // Payouts
     requestPayout:  actions.requestPayout,

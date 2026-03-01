@@ -5,25 +5,23 @@ import { Pill, Img, Spin, btn, inp, card } from "../../components/ui.jsx"
 import { vendorST } from "../MyOrdersPage.jsx"
 import { MerchantShell } from "./Shell.jsx"
 
-export function MerchantDash({ user,users,products,orders,nav,upU,showT,setUser,reviews=[] }) {
+export function MerchantDash({ user,users,products,orders,nav,updateProfile,showT,reviews=[] }) {
   const [pickupAddr,  setPickupAddr]  = useState("");
   const [pickupSched, setPickupSched] = useState("");
   const [pickupSaving,setPickupSaving]= useState(false);
   const mp    = products.filter(p => p.merchantId===user?.id);
-  const mo    = orders.filter(o => o.merchantId===user?.id);
-  const pending = mo.filter(o => ["submitted","verified"].includes(o.status));
-  const escrow  = mo.filter(o => ["submitted","verified","processing","shipped"].includes(o.status)).reduce((s,o)=>s+(o.merchantAmount||0),0);
-  const earned  = mo.filter(o => o.status==="released").reduce((s,o)=>s+(o.merchantAmount||0),0);
+  const mo      = orders.filter(o => o.vendors ? o.vendors.some(v=>v.merchantId===user?.id) : o.merchantId===user?.id);
+  const myV     = o => o.vendors?.find(v=>v.merchantId===user?.id) || {};
+  const pending = mo.filter(o => ["submitted","verified"].includes(myV(o).status || o.status));
+  const escrow  = mo.reduce((s,o) => { const v=myV(o); const vs=v.status||o.status; return ["submitted","verified","processing","shipped"].includes(vs) ? s+(v.merchantAmount||o.merchantAmount||0) : s; }, 0);
+  const earned  = mo.reduce((s,o) => { const v=myV(o); return (v.status||o.status)==="released" ? s+(v.merchantAmount||o.merchantAmount||0) : s; }, 0);
   const mu = users?.find(u=>u.id===user?.id)||user;
   const walletBal = mu?.walletBalance||0;
   // sync pickup state from user data
   React.useEffect(()=>{ setPickupAddr(mu?.pickupAddress||""); setPickupSched(mu?.pickupSchedule||""); },[mu?.pickupAddress,mu?.pickupSchedule]);
   const savePickup = async () => {
     setPickupSaving(true);
-    const updated = users.map(u=>u.id===user.id?{...u,pickupAddress:pickupAddr.trim(),pickupSchedule:pickupSched.trim()}:u);
-    await upU(updated);
-    const nu = updated.find(u=>u.id===user.id);
-    setUser(nu);
+    await updateProfile({ pickupAddress: pickupAddr.trim(), pickupSchedule: pickupSched.trim() });
     setPickupSaving(false);
     showT("Datos de retiro guardados ✓");
   };
@@ -57,7 +55,7 @@ export function MerchantDash({ user,users,products,orders,nav,upU,showT,setUser,
               ? <img src={user.storeLogo} style={{width:"100%",height:"100%",objectFit:"cover"}} />
               : <span style={{fontFamily:Fh,fontWeight:900,fontSize:22,color:"#fff"}}>{user?.storeName?.[0]||"🏪"}</span>}
             <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.45)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#fff",opacity:0}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>📷</div>
-            <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0];if(!f)return;const b=await compressImg(f,400);if(b){const nu=users.map(u=>u.id===user.id?{...u,storeLogo:b}:u);await upU(nu);const nu2=nu.find(u=>u.id===user.id);setUser(nu2);showT("Logo actualizado ✓");}e.target.value="";}} />
+            <input type="file" accept="image/*" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0];if(!f)return;const b=await compressImg(f,400);if(b){await updateProfile({storeLogo:b});showT("Logo actualizado ✓");}e.target.value="";}} />
           </label>
           <div>
             <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
