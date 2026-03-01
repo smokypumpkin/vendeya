@@ -20,6 +20,7 @@ import {
   authApi, profilesApi, productsApi, ordersApi, reviewsApi,
   notifsApi, payReqsApi, favsApi, configApi, realtimeApi,
 } from '../api/index.jsx'
+import { toNotif } from '../lib/transforms.js'
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -176,20 +177,24 @@ export function StoreProvider({ children }) {
       return profile
     }
 
+    const withTimeout = (promise, ms) =>
+      Promise.race([promise, new Promise(resolve => setTimeout(resolve, ms))])
+
     const boot = async () => {
+      // 1. Public data — with 8s timeout so it never hangs forever
+      await withTimeout(loadPublic(), 8000)
+
+      // 2. Exchange rate (BCV)
       try {
-        // 1. Public data first — works without auth
-        await loadPublic()
+        const r = await fetch('https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd')
+        const j = await r.json()
+        const v = j?.price || j?.data?.price
+        if (v && +v > 1) dispatch({ type: 'SET_RATE', payload: +v })
+      } catch {}
 
-        // 2. Exchange rate (BCV)
-        try {
-          const r = await fetch('https://pydolarve.org/api/v1/dollar?page=bcv&monitor=usd')
-          const j = await r.json()
-          const v = j?.price || j?.data?.price
-          if (v && +v > 1) dispatch({ type: 'SET_RATE', payload: +v })
-        } catch {}
-
-        // 3. Restore existing session
+      // 3. Restore existing session — with 6s timeout
+      // (getSession can hang when token expired and network fails)
+      await withTimeout((async () => {
         try {
           const { data: { session } } = await authApi.getSession()
           if (session?.user) {
@@ -201,9 +206,9 @@ export function StoreProvider({ children }) {
             await loadPrivate(session.user.id)
           }
         } catch {}
-      } finally {
-        dispatch({ type: 'READY' })
-      }
+      })(), 6000)
+
+      dispatch({ type: 'READY' })
 
       // 4. Realtime — keep state in sync across devices/tabs
       unsubRealtime = realtimeApi.subscribe({
