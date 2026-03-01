@@ -95,11 +95,15 @@ export function useActions() {
   // ── Products ──────────────────────────────────────────────────────────────
 
   const saveProduct = useCallback(async (product) => {
-    const { error } = await productsApi.upsert(product)
-    if (error) { toast('Error al guardar producto', true); return { error } }
-    dispatch({ type: 'UPSERT_PRODUCT', payload: product })
-    toast('Producto guardado ✓')
-    return {}
+    try {
+      const { error } = await productsApi.upsert(product)
+      if (error) { toast('Error al guardar producto', true); return { error } }
+      dispatch({ type: 'UPSERT_PRODUCT', payload: product })
+      return {}
+    } catch(e) {
+      toast('Error al guardar producto', true)
+      return { error: e }
+    }
   }, [dispatch, toast])
 
   const deleteProduct = useCallback(async (productId) => {

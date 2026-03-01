@@ -49,26 +49,33 @@ export function MerchantAddEdit({ user,products,saveProduct,nav,showT,params }) 
     if(!allowsPickup && !allowsDelivery) { showT("Debes activar al menos una opción de entrega",true); return; }
     if(allowsDelivery && !freeShipping && (!shippingCost || +shippingCost <= 0)) { showT("Indica el costo de envío o activa Envío GRATIS",true); return; }
     setSaving(true);
-    await new Promise(r=>setTimeout(r,400));
-    const data = {
-      name:censorContact(name),price:+price,
-      salePrice:salePrice&&+salePrice<+price ? +salePrice : null,
-      category:cat,condition:cond,description:censorContact(desc),
-      image:images[0]||"", images:[...images],
-      stock:+stock,allowsPickup,allowsDelivery,deliveryDays,
-      shippingCost:freeShipping?0:(+shippingCost||0),freeShipping:!!freeShipping,
-      merchantLoc:user.location||"Venezuela"
-    };
-    if(ep) {
-      await saveProduct({...ep, ...data, active:+stock>0?ep.active:false});
-      showT("Actualizado ✓");
-    } else {
-      const np = {id:uid(),merchantId:user.id,merchantName:user.storeName||user.name,merchantLoc:user.location||"Venezuela",active:true,views:0,questions:[],createdAt:new Date().toISOString(),...data};
-      await saveProduct(np);
-      showT("Publicado 🎉");
+    try {
+      await new Promise(r=>setTimeout(r,400));
+      const data = {
+        name:censorContact(name),price:+price,
+        salePrice:salePrice&&+salePrice<+price ? +salePrice : null,
+        category:cat,condition:cond,description:censorContact(desc),
+        image:images[0]||"", images:[...images],
+        stock:+stock,allowsPickup,allowsDelivery,deliveryDays,
+        shippingCost:freeShipping?0:(+shippingCost||0),freeShipping:!!freeShipping,
+        merchantLoc:user.location||"Venezuela"
+      };
+      let result;
+      if(ep) {
+        result = await saveProduct({...ep, ...data, active:+stock>0?ep.active:false});
+      } else {
+        const np = {id:uid(),merchantId:user.id,merchantName:user.storeName||user.name,merchantLoc:user.location||"Venezuela",active:true,views:0,questions:[],createdAt:new Date().toISOString(),...data};
+        result = await saveProduct(np);
+      }
+      if(!result?.error) {
+        showT(ep ? "Actualizado ✓" : "Publicado 🎉");
+        nav("merchant-products");
+      }
+    } catch(e) {
+      showT("Error al guardar. Intenta de nuevo.", true);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
-    nav("merchant-products");
   };
   const disc = salePrice&&price&&+salePrice<+price ? Math.round((1-+salePrice/+price)*100) : 0;
 

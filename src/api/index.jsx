@@ -86,7 +86,13 @@ export const productsApi = {
       ...(createdAt ? { created_at: createdAt } : {}),
       data: rest,
     }
-    const { error } = await sb.from('products').upsert(row, { onConflict: 'id' })
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timeout')), 15000)
+    )
+    const { error } = await Promise.race([
+      sb.from('products').upsert(row, { onConflict: 'id' }),
+      timeout,
+    ])
     return { error }
   },
 
